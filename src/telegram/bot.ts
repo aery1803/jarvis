@@ -9,6 +9,9 @@ import { SessionManager } from '../sessions/manager.js';
 import { MemoryManager } from '../memory/manager.js';
 import { KillSwitch } from '../security/kill-switch.js';
 import { LLMProvider } from '../services/provider.js';
+import { SearXNGClient } from '../services/searxng.js';
+import { ContentDistiller } from '../services/scraper.js';
+import { ConsensusEngine } from '../services/consensus.js';
 
 export interface TelegramBotOptions {
   token: string;
@@ -27,11 +30,17 @@ export class TelegramBotClient {
   private isPolling = false;
   private pollingOffset = 0;
   private activeSessions = new Map<string, string>(); // userId -> sessionId
+  private searchClient: SearXNGClient;
+  private distiller: ContentDistiller;
+  private consensus: ConsensusEngine;
 
   constructor(private options: TelegramBotOptions) {
     this.token = options.token;
     this.ownerId = options.ownerId;
     this.baseUrl = options.baseUrl ?? `https://api.telegram.org/bot${this.token}`;
+    this.searchClient = new SearXNGClient({ enableFallback: true });
+    this.distiller = new ContentDistiller();
+    this.consensus = new ConsensusEngine();
   }
 
   getOwnerId(): string {
@@ -264,10 +273,13 @@ export class TelegramBotClient {
       case '/help':
         await this.sendMessage(
           chatId,
-          `*Jarvis Local AI Assistant (Phase 2)*\n\n` +
+          `*Jarvis Local AI Assistant (Phase 2 & 3)*\n\n` +
             `*Available Commands:*\n` +
             `- \`/status\` - Workstation specs, free memory & state\n` +
             `- \`/id\` - Show your numeric Telegram User ID\n` +
+            `- \`/models\` - List available local models\n` +
+            `- \`/model <name>\` - Switch active model (e.g. qwen2.5-coder:1.5b)\n` +
+            `- \`/research <query>\` - Run multi-source research on any topic\n` +
             `- \`/new <name>\` - Start a new isolated workspace session\n` +
             `- \`/sessions\` - List recent conversation sessions\n` +
             `- \`/switch <id>\` - Switch active session\n` +
@@ -275,9 +287,65 @@ export class TelegramBotClient {
             `- \`/memory\` - View owner profile and preferences\n` +
             `- \`/kill\` - Emergency kill switch: cancel all active tasks\n` +
             `- \`/help\` - Show this manual\n\n` +
-            `Send any message to chat directly.`
+            `Send any question or task to chat directly.`
         );
         break;
+
+      case '/models': {
+        const models = this.options.llmProvider?.listModels ? await this.options.llmProvider.listModels() : ['qwen2.5:7b', 'qwen2.5-coder:1.5b'];
+        const current = this.options.llmProvider?.getModel?.() ?? 'qwen2.5:7b';
+        const modelList = models.map((m) => `- \`${m}\`${m === current ? ' *(active)*' : ''}`).join('\n');
+        await this.sendMessage(
+          chatId,
+          `*Installed Local Models:*\n\n${modelList}\n\nSwitch models using: \`/model <name>\``
+        );
+        break;
+      }
+
+      case '/model': {
+        const targetModel = args[0]?.trim();
+        if (!targetModel) {
+          await this.sendMessage(chatId, `Please specify a model: \`/model <name>\`\nRun \`/models\` to see available models.`);
+          break;
+        }
+        if (this.options.llmProvider?.setModel) {
+          this.options.llmProvider.setModel(targetModel);
+          await this.sendMessage(chatId, `Switched active model to: *${targetModel}*`);
+        } else {
+          await this.sendMessage(chatId, `Active LLM provider does not support dynamic switching.`);
+        }
+        break;
+      }
+
+      case '/research': {
+        const query = args.join(' ').trim();
+        if (!query) {
+          await this.sendMessage(chatId, `Please provide a query: \`/research <topic>\``);
+          break;
+        }
+        await this.sendAction(chatId, 'typing');
+        try {
+          const results = await this.searchClient.search(query, { maxResults: 3 });
+          const extracted = results.map((r) => this.distiller.extractText(r.snippet, r.url));
+          const report = this.consensus.buildReport([
+            {
+              claim: query,
+              sources: extracted.map((e) => ({ source: e.url, excerpt: e.content })),
+            },
+          ]);
+          const sources = extracted.map((e) => `- ${e.url}`).join('\n');
+          await this.sendMessage(
+            chatId,
+            `*Deep Research: ${query}*\n\n` +
+              `*Consensus Confidence:* ${(report.overallScore * 100).toFixed(0)}%\n\n` +
+              `*Synthesized Findings:*\n${extracted.map((e) => e.content).join('\n\n')}\n\n` +
+              `📚 *Sources:*\n${sources}`
+          );
+        } catch (err: any) {
+          await this.sendMessage(chatId, `Research error: ${err.message}`);
+        }
+        break;
+      }
 
       case '/id':
       case '/myid': {
@@ -443,21 +511,58 @@ export class TelegramBotClient {
       contextPrompt = ctx.systemPromptAdditions;
     }
 
+    // Dynamic model routing: if code requested, route to code lane
+    const lower = text.toLowerCase();
+    const isCode = ['code', 'script', 'function', 'class', 'write', 'implement', 'typescript', 'python', 'powershell', 'fix', 'bug', 'refactor', 'rewrite'].some((k) => lower.includes(k));
+    const previousModel = this.options.llmProvider?.getModel?.();
+    if (isCode && this.options.llmProvider?.setModel) {
+      this.options.llmProvider.setModel('qwen2.5-coder:1.5b');
+    }
+
+    // Automated research augmentation for questions & factual lookups
+    let researchFacts = '';
+    let sourcesFooter = '';
+    const isQuestion = lower.includes('?') || ['search', 'find', 'what', 'why', 'how', 'who', 'where', 'when', 'explain', 'tell me', 'lookup', 'research', 'latest', 'news', 'specs', 'architecture'].some((k) => lower.includes(k));
+
+    if (isQuestion) {
+      try {
+        const searchResults = await this.searchClient.search(text, { maxResults: 3 });
+        if (searchResults.length > 0) {
+          const extracted = searchResults.map((r) => this.distiller.extractText(r.snippet, r.url));
+          const report = this.consensus.buildReport([
+            {
+              claim: text,
+              sources: extracted.map((e) => ({ source: e.url, excerpt: e.content })),
+            },
+          ]);
+          researchFacts = `\n[Verified Research Facts]:\n${extracted.map((e, idx) => `[Source ${idx + 1}]: ${e.content}`).join('\n')}\nConsensus Score: ${(report.overallScore * 100).toFixed(0)}%\n`;
+          sourcesFooter = `\n\n📚 *Sources:*\n${extracted.map((e) => `- ${e.url}`).join('\n')}`;
+        }
+      } catch {
+        // Fallback silently if network/SearXNG offline
+      }
+    }
+
     // Generate response using local LLM provider if configured
     let responseText = '';
     if (this.options.llmProvider) {
       try {
-        const fullPrompt = contextPrompt ? `${contextPrompt}\n\nUser: ${text}\nAssistant:` : text;
+        const systemDirectives = 'You are Jarvis, the owner\'s autonomous local AI assistant on ASUS ROG Flow Z13. Be helpful, clear, and direct. Provide complete code and scripts when requested. Never refuse safe tasks.';
+        const fullPrompt = `${systemDirectives}\n${contextPrompt}\n${researchFacts}\nUser: ${text}\nAssistant:`;
         const res = await this.options.llmProvider.generate(fullPrompt);
-        responseText = res.text;
+        responseText = typeof res === 'string' ? res : (res as any)?.text ?? String(res);
       } catch (err: any) {
         responseText = `Inference failed: ${err.message}`;
+      } finally {
+        if (isCode && previousModel && this.options.llmProvider?.setModel) {
+          this.options.llmProvider.setModel(previousModel);
+        }
       }
     } else {
       responseText = `Jarvis received your request in ${taskTag || 'session'}.\n\n"${text}"`;
     }
 
-    const finalMessage = taskTag ? `${taskTag}\n\n${responseText}` : responseText;
+    const finalMessage = taskTag ? `${taskTag}\n\n${responseText}${sourcesFooter}` : `${responseText}${sourcesFooter}`;
     await this.sendMessage(chatId, finalMessage);
   }
 

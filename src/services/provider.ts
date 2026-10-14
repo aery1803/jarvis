@@ -21,6 +21,9 @@ export interface LLMProvider {
   chat(messages: ChatMessage[], options?: GenerateOptions): Promise<string>;
   getModel(): string;
   getBaseUrl(): string;
+  setModel?(model: string): void;
+  listModels?(): Promise<string[]>;
+  pullModel?(name: string): Promise<boolean>;
 }
 
 export interface OllamaProviderOptions {
@@ -104,6 +107,39 @@ export class OllamaProvider implements LLMProvider {
       throw err;
     }
   }
+
+  public setModel(model: string): void {
+    this.model = model;
+    logger.info(`[OllamaProvider] Active model switched to: ${model}`);
+  }
+
+  public async listModels(): Promise<string[]> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/tags`);
+      if (res.ok) {
+        const data = (await res.json()) as any;
+        return (data.models ?? []).map((m: any) => m.name);
+      }
+    } catch {
+      // Return local default shortlist
+    }
+    return [this.model, 'qwen2.5-coder:1.5b'];
+  }
+
+  public async pullModel(modelName: string): Promise<boolean> {
+    logger.info(`[OllamaProvider] Requesting pull for model: ${modelName}`);
+    try {
+      const res = await fetch(`${this.baseUrl}/api/pull`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: modelName, stream: false }),
+      });
+      return res.ok;
+    } catch (err: any) {
+      logger.warn(`[OllamaProvider] Model pull failed: ${err.message}`);
+      return false;
+    }
+  }
 }
 
 export interface MockLLMProviderOptions {
@@ -122,6 +158,18 @@ export class MockLLMProvider implements LLMProvider {
 
   public getModel(): string {
     return this.model;
+  }
+
+  public setModel(model: string): void {
+    this.model = model;
+  }
+
+  public async listModels(): Promise<string[]> {
+    return [this.model, 'mock-qwen2.5-coder:1.5b'];
+  }
+
+  public async pullModel(_name: string): Promise<boolean> {
+    return true;
   }
 
   public getBaseUrl(): string {

@@ -200,7 +200,7 @@ export class MemoryManager {
 
   async deleteSensitive(userId: string, tag: string): Promise<boolean> {
     const res = await this.vaultCollection.deleteOne({ userId, tag });
-    return res > 0;
+    return Boolean(res);
   }
 
   // --- Prompt Context Assembly & Token Budgeting ---

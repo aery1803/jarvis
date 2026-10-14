@@ -70,7 +70,7 @@ export class EvaluationHarness {
       const response = await this.provider.generate(testCase.prompt);
       const latencyMs = Date.now() - start;
 
-      const output = response.text;
+      const output = typeof response === 'string' ? response : (response as any).text ?? String(response);
       let matched = false;
       if (typeof testCase.expectedPattern === 'string') {
         matched = output.toLowerCase().includes(testCase.expectedPattern.toLowerCase());

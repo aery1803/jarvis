@@ -8,6 +8,7 @@ import { MemoryManager } from '../src/memory/manager.js';
 import { KillSwitch } from '../src/security/kill-switch.js';
 import { TelegramBotClient } from '../src/telegram/bot.js';
 import { TelegramUpdate } from '../src/telegram/types.js';
+import { MockLLMProvider } from '../src/services/provider.js';
 
 describe('TelegramBotClient', () => {
   const testDbPath = path.resolve(process.cwd(), 'data', 'test-telegram.db');
@@ -15,6 +16,7 @@ describe('TelegramBotClient', () => {
   let sessions: SessionManager;
   let memory: MemoryManager;
   let killSwitch: KillSwitch;
+  let llmProvider: MockLLMProvider;
   let bot: TelegramBotClient;
   let sentMessages: Array<{ method: string; body: any }> = [];
 
@@ -26,6 +28,7 @@ describe('TelegramBotClient', () => {
     sessions = new SessionManager(store);
     memory = new MemoryManager(store);
     killSwitch = new KillSwitch(store, sessions);
+    llmProvider = new MockLLMProvider({ cannedResponse: 'Jarvis test answer' });
     sentMessages = [];
 
     bot = new TelegramBotClient({
@@ -34,6 +37,7 @@ describe('TelegramBotClient', () => {
       sessionManager: sessions,
       memoryManager: memory,
       killSwitch: killSwitch,
+      llmProvider,
     });
 
     // Mock API calls to prevent external network requests during unit tests
@@ -181,5 +185,53 @@ describe('TelegramBotClient', () => {
     assert.equal(killSwitch.isKilled(), true);
     const killMsg = sentMessages.find((m) => m.method === 'sendMessage' && m.body.text.includes('EMERGENCY STOP TRIGGERED'));
     assert.ok(killMsg);
+  });
+
+  test('should handle /models and /model commands', async () => {
+    const modelsUpdate: TelegramUpdate = {
+      update_id: 6,
+      message: {
+        message_id: 56,
+        from: { id: 123456789, is_bot: false, first_name: 'Owner' },
+        chat: { id: 123456789, type: 'private' },
+        date: 12345,
+        text: '/models',
+      },
+    };
+
+    await bot.handleUpdate(modelsUpdate);
+    const modelsMsg = sentMessages.find((m) => m.method === 'sendMessage' && m.body.text.includes('Installed Local Models'));
+    assert.ok(modelsMsg);
+
+    const switchUpdate: TelegramUpdate = {
+      update_id: 7,
+      message: {
+        message_id: 57,
+        from: { id: 123456789, is_bot: false, first_name: 'Owner' },
+        chat: { id: 123456789, type: 'private' },
+        date: 12346,
+        text: '/model qwen2.5-coder:1.5b',
+      },
+    };
+
+    await bot.handleUpdate(switchUpdate);
+    assert.equal(llmProvider.getModel(), 'qwen2.5-coder:1.5b');
+  });
+
+  test('should handle regular chat messages with answer generation', async () => {
+    const chatUpdate: TelegramUpdate = {
+      update_id: 8,
+      message: {
+        message_id: 58,
+        from: { id: 123456789, is_bot: false, first_name: 'Owner' },
+        chat: { id: 123456789, type: 'private' },
+        date: 12347,
+        text: 'What is the UMA memory configuration?',
+      },
+    };
+
+    await bot.handleUpdate(chatUpdate);
+    const reply = sentMessages.find((m) => m.method === 'sendMessage' && m.body.text.includes('Jarvis test answer'));
+    assert.ok(reply);
   });
 });

@@ -41,12 +41,12 @@ export class SessionManager {
       { userId, id: sessionId },
       { title: newTitle, updatedAt: new Date().toISOString() }
     );
-    return res > 0;
+    return Boolean(res);
   }
 
   async deleteSession(userId: string, sessionId: string): Promise<boolean> {
     const deleted = await this.sessionCollection.deleteOne({ userId, id: sessionId });
-    if (deleted > 0) {
+    if (deleted) {
       await this.taskCollection.deleteMany({ userId, sessionId });
       return true;
     }
@@ -142,7 +142,7 @@ export class SessionManager {
       update.error = error;
     }
     const res = await this.taskCollection.updateOne({ id: taskId }, update);
-    return res > 0;
+    return Boolean(res);
   }
 
   async cancelTask(taskId: string, reason = 'Cancelled by user'): Promise<boolean> {

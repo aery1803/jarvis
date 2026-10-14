@@ -121,13 +121,22 @@ export class JarvisWebServer {
         return;
       }
 
-      // 5. Streaming Chat API (SSE)
+      // 5. Models API
+      if (pathname === '/api/models' && method === 'GET') {
+        const provider = new OllamaProvider({ baseUrl: config.ollamaBaseUrl });
+        const models = await provider.listModels();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ models, active: provider.getModel() }));
+        return;
+      }
+
+      // 6. Streaming Chat API (SSE)
       if (pathname === '/api/chat/stream' && method === 'POST') {
         await this.handleStreamingChat(req, res);
         return;
       }
 
-      // 6. Static File Serving
+      // 7. Static File Serving
       this.serveStaticFile(pathname, res);
     } catch (err: any) {
       logger.error(`[JarvisWebServer] Error handling ${method} ${pathname}: ${err.message}`);
@@ -163,12 +172,15 @@ export class JarvisWebServer {
     let sources: string[] = [];
     let researchContext = '';
 
-    // Step A: Optional Web Research
-    if (useResearch) {
-      res.write(`data: ${JSON.stringify({ chunk: '🔍 *Consulting local SearXNG metasearch...*\n\n' })}\n\n`);
+    // Step A: Automated Web Research (if requested or detected as lookup/factual query)
+    const lower = prompt.toLowerCase();
+    const shouldResearch = useResearch || lower.includes('?') || ['search', 'find', 'what', 'why', 'how', 'who', 'where', 'when', 'explain', 'tell me', 'lookup', 'research', 'latest', 'news', 'specs', 'architecture'].some((k) => lower.includes(k));
+
+    if (shouldResearch) {
+      res.write(`data: ${JSON.stringify({ chunk: '🔍 *Consulting local SearXNG metasearch & consensus...*\n\n' })}\n\n`);
       try {
         const searchClient = new SearXNGClient({ enableFallback: true });
-        const results = await searchClient.search(prompt, { maxResults: 2 });
+        const results = await searchClient.search(prompt, { maxResults: 3 });
         const distiller = new ContentDistiller();
         const consensusEngine = new ConsensusEngine();
 
@@ -186,13 +198,18 @@ export class JarvisWebServer {
       }
     }
 
+    // Dynamic model routing: if code requested and model not explicitly overridden
+    const isCode = ['code', 'script', 'function', 'class', 'write', 'implement', 'typescript', 'python', 'powershell', 'fix', 'bug', 'refactor', 'rewrite'].some((k) => lower.includes(k));
+    const activeModel = model || (isCode ? 'qwen2.5-coder:1.5b' : 'qwen2.5:7b');
+
     // Step B: Inference with Ollama (or MockLLM fallback)
     const provider = new OllamaProvider({
       baseUrl: config.ollamaBaseUrl,
-      model: model || 'qwen2.5:7b',
+      model: activeModel,
     });
 
-    const fullPrompt = `${researchContext}\nUser question: ${prompt}\nAnswer helpfully and concisely.`;
+    const systemPrompt = "You are Jarvis, the owner's autonomous local AI assistant running on ASUS ROG Flow Z13. Be helpful, direct, and actionable. Provide complete solutions, scripts, and code when asked. Never give negative rejections on safe tasks.";
+    const fullPrompt = `${systemPrompt}\n${researchContext}\nUser question: ${prompt}\nAssistant:`;
     let accumulatedResponse = '';
 
     try {

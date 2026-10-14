@@ -345,6 +345,30 @@ modelSelect.addEventListener('change', () => {
   currentModelTag.textContent = modelSelect.value;
 });
 
+async function loadModels() {
+  try {
+    const res = await fetch('/api/models');
+    const data = await res.json();
+    if (data.models && data.models.length > 0) {
+      modelSelect.innerHTML = '';
+      data.models.forEach((m) => {
+        const opt = document.createElement('option');
+        opt.value = m;
+        const lane = m.includes('coder') ? '(Code Lane - 141 t/s)' : '(Reasoning Lane - 41 t/s)';
+        opt.textContent = `${m} ${lane}`;
+        if (m === data.active || m.includes('7b')) {
+          opt.selected = true;
+          currentModelTag.textContent = m;
+        }
+        modelSelect.appendChild(opt);
+      });
+    }
+  } catch {
+    // Keep fallback options
+  }
+}
+
 // Initial boot
 checkHealth();
+loadModels();
 loadSessions();

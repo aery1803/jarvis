@@ -65,4 +65,13 @@ describe('JarvisWebServer', () => {
     assert.match(text, /<!DOCTYPE html>/i);
     assert.match(text, /Jarvis/i);
   });
+
+  test('GET /api/models returns available models and active model', async () => {
+    const res = await fetch(`${baseUrl}/api/models`);
+    assert.equal(res.status, 200);
+    const json = (await res.json()) as any;
+    assert.ok(Array.isArray(json.models));
+    assert.ok(json.models.length > 0);
+    assert.ok(json.active);
+  });
 });

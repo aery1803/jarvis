@@ -12,7 +12,7 @@
 import os from 'node:os';
 import crypto from 'node:crypto';
 import type { OwnActionRegistry } from './action-registry.js';
-import type { GatewayActionRequest, OwnActionRecord } from './types.js';
+import type { GatewayActionRequest, OwnActionRecord, ActionType } from './types.js';
 import { logger } from '../utils/logger.js';
 
 export class ActionGatewayForbiddenError extends Error {
@@ -127,5 +127,22 @@ export class ActionGateway {
     this.registry.recordAction(record);
 
     return result;
+  }
+
+  public async executeTier2Action<T = boolean>(
+    actionType: ActionType | string,
+    description: string,
+    targetId = 'system',
+    handler?: () => Promise<T>
+  ): Promise<T> {
+    return this.executeAction(
+      {
+        tier: 2,
+        actionType: actionType as any,
+        targetId,
+        description,
+      },
+      handler ?? (async () => true as unknown as T)
+    );
   }
 }
