@@ -115,7 +115,10 @@ async function startAll(): Promise<void> {
   console.log('------------------------------------------------------\n');
 
   // Graceful Shutdown
+  let isShuttingDown = false;
   const shutdown = async () => {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
     console.log('\n[Jarvis Master] Stopping all services cleanly...');
     clearInterval(watcherInterval);
     if (bot) {
@@ -130,6 +133,7 @@ async function startAll(): Promise<void> {
 
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
+  process.on('SIGUSR2', shutdown);
 }
 
 startAll().catch((err) => {

@@ -5,6 +5,8 @@
   "description": "Jarvis Local AI Agent - Autonomous personal assistant on ASUS ROG Flow Z13",
   "type": "module",
   "scripts": {
+    "dev": "nodemon",
+    "start:watch": "nodemon",
     "start": "tsx src/cli/start-all.ts",
     "start:all": "tsx src/cli/start-all.ts",
     "build": "tsc",
@@ -26,6 +28,7 @@
   },
   "devDependencies": {
     "@types/node": "26.6.5",
+    "nodemon": "^3.1.14",
     "tsx": "4.23.15",
     "typescript": "7.0.2"
   }

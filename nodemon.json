@@ -1,0 +1,19 @@
+{
+  "watch": [
+    "src"
+  ],
+  "ext": "ts,js,json,html,css",
+  "ignore": [
+    "data/**",
+    "logs/**",
+    "tests/**",
+    "node_modules/**",
+    ".git/**",
+    "dist/**",
+    "scripts/**",
+    "*.log"
+  ],
+  "exec": "tsx src/cli/start-all.ts",
+  "delay": 500,
+  "signal": "SIGINT"
+}

@@ -25,6 +25,16 @@ npm start
 ```
 *(Or in PowerShell: `.\scripts\start-all.ps1`)*
 
+### 🔥 Auto-Reload Mode (Watch Mode with Nodemon)
+Want Jarvis to automatically re-run whenever you change or improve any code? Run:
+
+```powershell
+npm run dev
+# Or if you have nodemon installed globally:
+nodemon
+```
+*Whenever you edit any file in `src/` (TypeScript, HTML, CSS, JSON), Nodemon instantly restarts Jarvis cleanly with zero downtime!*
+
 ### What happens when you run this?
 In 2 seconds, three awesome things wake up at the exact same time:
 1. 🌐 **Web Chat Workstation:** Available in your browser at [`http://localhost:3000`](http://localhost:3000).
@@ -94,11 +104,13 @@ If you ever want to run just one specific piece of Jarvis:
 | Command | What It Runs |
 |---|---|
 | `npm start` | **All-in-One:** Starts Web Chat, Telegram Bot, and Dev Agent together! |
+| `npm run dev` | **Auto-Reload:** Runs all services with `nodemon`, auto-restarting on code changes! |
+| `nodemon` | Same as `npm run dev` (when using nodemon globally) |
 | `npm run web` | Starts only the Web Chat UI on `http://localhost:3000` |
 | `npm run telegram` | Starts only the Telegram Bot daemon |
 | `npm run research` | Runs the deep research terminal tool |
 | `npm run devagent:watch` | Starts the autonomous pair-programming watcher on GitHub |
-| `npm test` | Runs all 104 automated tests (takes ~5 seconds) |
+| `npm test` | Runs all 113 automated tests across 32 suites (takes ~5 seconds) |
 | `npm run build` | Compiles all TypeScript code into production JavaScript |
 | `npm run benchmark:eval` | Runs intelligence benchmark on installed models (Score, Grade, t/s) |
 | `npm run searxng` | Starts your local private search engine in Docker |
