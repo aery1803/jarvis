@@ -77,4 +77,10 @@ export class Logger {
   }
 }
 
-export const logger = new Logger();
+function levelFromEnv(value: string | undefined): LogLevel {
+  const upper = value?.trim().toUpperCase();
+  return upper === 'DEBUG' || upper === 'INFO' || upper === 'WARN' || upper === 'ERROR' ? upper : 'INFO';
+}
+
+/** Honours `JARVIS_LOG_LEVEL` (DEBUG, INFO, WARN, ERROR); defaults to INFO. */
+export const logger = new Logger(levelFromEnv(process.env.JARVIS_LOG_LEVEL));

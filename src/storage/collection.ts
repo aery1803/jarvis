@@ -221,6 +221,26 @@ export class DocumentStore {
     return this.collection<T>(name);
   }
 
+  /**
+   * Runs `fn` in one SQLite transaction: committed if it returns, rolled back if it throws. `fn` must be
+   * synchronous: `COMMIT` would otherwise run before an async callback's writes, so a returned promise is
+   * rolled back and rejected. Not reentrant (SQLite has no nested `BEGIN`).
+   */
+  public transaction<R>(fn: () => R): R {
+    this.db.exec('BEGIN');
+    try {
+      const result = fn();
+      if (result instanceof Promise) {
+        throw new TypeError('DocumentStore.transaction() callback must be synchronous');
+      }
+      this.db.exec('COMMIT');
+      return result;
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
   public close(): void {
     this.db.close();
   }

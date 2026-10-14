@@ -124,4 +124,50 @@ describe('DocumentStore & MongoDB-Style Collection', () => {
     assert.equal(item.findings[0], '54GB VRAM available');
     assert.equal(item.confidence, 0.95);
   });
+
+  test('transaction() commits every write when the callback returns', () => {
+    const users = store.collection<TestUser>('users');
+
+    const result = store.transaction(() => {
+      users.insertOne({ id: 't1', name: 'One', email: 'one@example.test', role: 'user' });
+      users.insertOne({ id: 't2', name: 'Two', email: 'two@example.test', role: 'user' });
+      return 'done';
+    });
+
+    assert.equal(result, 'done');
+    assert.equal(users.count(), 2);
+  });
+
+  test('transaction() rolls back every write when the callback throws', () => {
+    const users = store.collection<TestUser>('users');
+    users.insertOne({ id: 'kept', name: 'Kept', email: 'kept@example.test', role: 'admin' });
+
+    assert.throws(
+      () =>
+        store.transaction(() => {
+          users.insertOne({ id: 't3', name: 'Three', email: 'three@example.test', role: 'user' });
+          users.updateOne({ id: 'kept' }, { role: 'user' });
+          throw new Error('boom');
+        }),
+      /boom/
+    );
+
+    assert.equal(users.count(), 1);
+    assert.equal(users.findOne({ id: 'kept' })?.role, 'admin');
+  });
+
+  test('transaction() rejects an async callback instead of committing before it finishes', () => {
+    const users = store.collection<TestUser>('users');
+
+    assert.throws(
+      () =>
+        store.transaction(() => {
+          users.insertOne({ id: 't4', name: 'Four', email: 'four@example.test', role: 'user' });
+          return Promise.resolve();
+        }),
+      TypeError
+    );
+
+    assert.equal(users.count(), 0);
+  });
 });

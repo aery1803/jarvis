@@ -8,7 +8,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { z } from 'zod';
-import { ChatStore } from '../storage/chat-store.js';
+import { ChatStore, DEFAULT_CHAT_USER_ID } from '../storage/chat-store.js';
+import type { SessionManager } from '../sessions/manager.js';
 import { OllamaProvider, MockLLMProvider, type LLMProvider, type GenerateStreamOptions } from '../services/provider.js';
 import type { MemoryManager } from '../memory/manager.js';
 import {
@@ -40,9 +41,11 @@ export interface WebServerOptions {
   /** LAN client IPs allowed in addition to loopback; defaults to `JARVIS_WEB_ALLOWED_IPS`. */
   allowedIps?: string[];
   chatStore?: ChatStore;
+  /** Shared with the Telegram bot so both surfaces read and write one set of sessions and turns. */
+  sessionManager?: SessionManager;
   /** Shared with the Telegram bot so both surfaces read and write one memory. */
   memoryManager?: MemoryManager;
-  /** Memory owner for web chats; the web UI is single-owner. */
+  /** Session and memory owner for web chats; the web UI is single-owner. */
   userId?: string;
   /** Builds the inference provider for a chat turn; tests inject a fake here. */
   providerFactory?: (model: string) => LLMProvider;
@@ -81,9 +84,10 @@ export class JarvisWebServer {
     this.port = options.port ?? 3000;
     this.host = options.host ?? config.webHost;
     this.allowedIps = options.allowedIps ?? config.webAllowedIps;
-    this.chatStore = options.chatStore ?? new ChatStore(path.join(process.cwd(), 'data', 'chat.db'));
+    this.userId = options.userId ?? DEFAULT_CHAT_USER_ID;
+    this.chatStore =
+      options.chatStore ?? new ChatStore(options.sessionManager ?? path.join(process.cwd(), 'data', 'jarvis.db'), this.userId);
     this.memoryManager = options.memoryManager ?? null;
-    this.userId = options.userId ?? 'owner';
     this.providerFactory = options.providerFactory ?? ((model) => new OllamaProvider({ baseUrl: config.ollamaBaseUrl, model }));
     this.publicDir = path.join(process.cwd(), 'src', 'web', 'public');
   }
@@ -157,7 +161,7 @@ export class JarvisWebServer {
 
       // 2. Sessions API
       if (pathname === '/api/sessions' && method === 'GET') {
-        const sessions = this.chatStore.getSessions();
+        const sessions = await this.chatStore.getSessions();
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(sessions));
         return;
@@ -165,7 +169,7 @@ export class JarvisWebServer {
 
       if (pathname === '/api/sessions' && method === 'POST') {
         const body = await this.readJsonBody(req);
-        const session = this.chatStore.createSession(body.title ?? 'New Conversation', body.model ?? 'qwen2.5:7b');
+        const session = await this.chatStore.createSession(body.title ?? 'New Conversation', body.model ?? 'qwen2.5:7b');
         res.writeHead(201, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(session));
         return;
@@ -175,7 +179,7 @@ export class JarvisWebServer {
       const messagesMatch = pathname.match(/^\/api\/sessions\/([a-zA-Z0-9_-]+)\/messages$/);
       if (messagesMatch && method === 'GET') {
         const sessionId = messagesMatch[1];
-        const messages = this.chatStore.getMessages(sessionId);
+        const messages = await this.chatStore.getMessages(sessionId);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(messages));
         return;
@@ -185,7 +189,7 @@ export class JarvisWebServer {
       const sessionDeleteMatch = pathname.match(/^\/api\/sessions\/([a-zA-Z0-9_-]+)$/);
       if (sessionDeleteMatch && method === 'DELETE') {
         const sessionId = sessionDeleteMatch[1];
-        this.chatStore.deleteSession(sessionId);
+        await this.chatStore.deleteSession(sessionId);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ success: true }));
         return;
@@ -247,12 +251,20 @@ export class JarvisWebServer {
     const model = parsedBody.data.model || undefined;
     const startedAt = Date.now();
 
+    // Checked before the SSE headers go out, so an unknown (or another user's) session is a plain 404
+    // rather than a stream that fails when `addMessage` throws `SessionNotFoundError`.
+    if (!(await this.chatStore.getSession(sessionId))) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Session not found' }));
+      return;
+    }
+
     // History is read before the new message is saved, so the current prompt is not duplicated into
     // the context; it is passed separately as the request.
-    const history: ConversationTurn[] = this.chatStore.getMessages(sessionId).map((m) => ({ role: m.role, content: m.content }));
+    const history: ConversationTurn[] = (await this.chatStore.getMessages(sessionId)).map((m) => ({ role: m.role, content: m.content }));
 
     // Record user message in ChatStore
-    this.chatStore.addMessage({
+    await this.chatStore.addMessage({
       sessionId,
       role: 'user',
       content: prompt,
@@ -409,13 +421,20 @@ export class JarvisWebServer {
     if (clientGone) partial = true;
 
     // Save assistant message to ChatStore, including what was generated before an early disconnect.
+    // The session can be deleted mid-stream (another tab, or Telegram). The SSE headers are already sent,
+    // so a throw here would reach `handleRequest`'s catch, whose `writeHead(500)` fails with
+    // `ERR_HTTP_HEADERS_SENT`; the reply is dropped with a warning instead.
     if (accumulatedResponse) {
-      this.chatStore.addMessage({
-        sessionId,
-        role: 'assistant',
-        content: accumulatedResponse,
-        meta: partial ? { sources, partial: true } : { sources },
-      });
+      try {
+        await this.chatStore.addMessage({
+          sessionId,
+          role: 'assistant',
+          content: accumulatedResponse,
+          meta: partial ? { sources, partial: true } : { sources },
+        });
+      } catch (err: unknown) {
+        logger.warn(`[JarvisWebServer] Assistant reply not saved: ${err instanceof Error ? err.message : String(err)}`, { sessionId });
+      }
     }
 
     // [DONE] goes out before the memory writes, so the browser stops waiting; the response stays open
@@ -445,7 +464,7 @@ export class JarvisWebServer {
         });
       }
 
-      const messages = this.chatStore.getMessages(turn.sessionId);
+      const messages = await this.chatStore.getMessages(turn.sessionId);
       if (shouldSummarize(messages.length)) {
         const summarizer = await resolveSummarizer(turn.provider);
         await summarizeAndStoreSession({

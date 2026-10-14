@@ -2,11 +2,18 @@
  * Jarvis Local AI Agent: Chat Session & Message Store
  * Authority: FEAT-004, Section 8.1, Section 11
  *
- * Backed by the MongoDB-style DocumentStore over native SQLite.
+ * The web chat's view of the shared `SessionManager`, scoped to one owner `userId`, so web and Telegram
+ * read and write the same sessions and turns. Keeps the web API's `ChatSession`/`ChatMessage` shapes;
+ * a session's model lives in its `metadata.model`.
  */
 
-import crypto from 'node:crypto';
-import { DocumentStore, type Collection } from './collection.js';
+import { DocumentStore } from './collection.js';
+import { SessionManager } from '../sessions/manager.js';
+import type { JarvisMessage, JarvisMessageMeta, JarvisSession, MessageRole } from '../sessions/types.js';
+
+/** Memory and session owner for web chats when no Telegram owner ID is configured. */
+export const DEFAULT_CHAT_USER_ID = 'owner';
+export const DEFAULT_CHAT_MODEL = 'qwen2.5:7b';
 
 export interface ChatSession {
   id?: string;
@@ -19,80 +26,90 @@ export interface ChatSession {
 export interface ChatMessage {
   id?: string;
   sessionId: string;
-  role: 'user' | 'assistant' | 'system';
+  role: MessageRole;
   content: string;
   createdAt: string;
-  meta?: {
-    sources?: string[];
-    confidence?: number;
-    toolCalls?: any[];
-    /** True when the stream ended early (client disconnect or provider failure) and `content` is incomplete. */
-    partial?: boolean;
+  meta?: JarvisMessageMeta;
+}
+
+function toChatSession(session: JarvisSession): ChatSession {
+  const model = session.metadata?.model;
+  return {
+    id: session.id,
+    title: session.title,
+    model: typeof model === 'string' ? model : DEFAULT_CHAT_MODEL,
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+  };
+}
+
+function toChatMessage(message: JarvisMessage): ChatMessage {
+  return {
+    id: message.id,
+    sessionId: message.sessionId,
+    role: message.role,
+    content: message.content,
+    createdAt: message.createdAt,
+    meta: message.meta,
   };
 }
 
 export class ChatStore {
-  private store: DocumentStore;
-  private sessions: Collection<ChatSession>;
-  private messages: Collection<ChatMessage>;
+  private sessions: SessionManager;
+  private ownedStore: DocumentStore | null;
+  private userId: string;
 
-  constructor(dbPath?: string) {
-    this.store = new DocumentStore(dbPath);
-    this.sessions = this.store.collection<ChatSession>('chat_sessions');
-    this.messages = this.store.collection<ChatMessage>('chat_messages');
+  /**
+   * `source` is either a database path, for a store of its own that `close()` closes, or the shared
+   * `SessionManager`, whose store `close()` leaves open for the Telegram bot.
+   */
+  constructor(source: string | SessionManager = ':memory:', userId: string = DEFAULT_CHAT_USER_ID) {
+    if (typeof source === 'string') {
+      this.ownedStore = new DocumentStore(source);
+      this.sessions = new SessionManager(this.ownedStore);
+    } else {
+      this.ownedStore = null;
+      this.sessions = source;
+    }
+    this.userId = userId;
   }
 
-  public createSession(title: string = 'New Conversation', model: string = 'qwen2.5:7b'): ChatSession {
-    const now = new Date().toISOString();
-    const session: ChatSession = {
-      id: `session-${crypto.randomUUID()}`,
-      title,
-      model,
-      createdAt: now,
-      updatedAt: now,
-    };
-    return this.sessions.insertOne(session);
+  public async createSession(title: string = 'New Conversation', model: string = DEFAULT_CHAT_MODEL): Promise<ChatSession> {
+    return toChatSession(await this.sessions.createSession(this.userId, title, { model }));
   }
 
-  public getSessions(): ChatSession[] {
-    const list = this.sessions.find();
-    // Sort newest first
-    return list.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  public async getSessions(): Promise<ChatSession[]> {
+    return (await this.sessions.listSessions(this.userId)).map(toChatSession);
   }
 
-  public getSession(id: string): ChatSession | null {
-    return this.sessions.findOne({ id });
+  public async getSession(id: string): Promise<ChatSession | null> {
+    const session = await this.sessions.getSession(this.userId, id);
+    return session ? toChatSession(session) : null;
   }
 
-  public updateSessionTitle(id: string, title: string): boolean {
-    const now = new Date().toISOString();
-    return this.sessions.updateOne({ id }, { title, updatedAt: now });
+  public async updateSessionTitle(id: string, title: string): Promise<boolean> {
+    return this.sessions.updateSessionTitle(this.userId, id, title);
   }
 
-  public deleteSession(id: string): boolean {
-    this.messages.deleteMany({ sessionId: id });
-    return this.sessions.deleteOne({ id });
+  public async deleteSession(id: string): Promise<boolean> {
+    return this.sessions.deleteSession(this.userId, id);
   }
 
-  public addMessage(msg: Omit<ChatMessage, 'id' | 'createdAt'>): ChatMessage {
-    const now = new Date().toISOString();
-    const record: ChatMessage = {
-      ...msg,
-      id: `msg-${crypto.randomUUID()}`,
-      createdAt: now,
-    };
-
-    const inserted = this.messages.insertOne(record);
-    this.sessions.updateOne({ id: msg.sessionId }, { updatedAt: now });
-    return inserted;
+  /** Throws `SessionNotFoundError` when the session is not one of the owner's. */
+  public async addMessage(msg: Omit<ChatMessage, 'id' | 'createdAt'>): Promise<ChatMessage> {
+    const message = await this.sessions.addMessage(this.userId, msg.sessionId, {
+      role: msg.role,
+      content: msg.content,
+      meta: msg.meta,
+    });
+    return toChatMessage(message);
   }
 
-  public getMessages(sessionId: string): ChatMessage[] {
-    const msgs = this.messages.find({ sessionId });
-    return msgs.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+  public async getMessages(sessionId: string): Promise<ChatMessage[]> {
+    return (await this.sessions.getMessages(this.userId, sessionId)).map(toChatMessage);
   }
 
   public close(): void {
-    this.store.close();
+    this.ownedStore?.close();
   }
 }

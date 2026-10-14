@@ -11,6 +11,8 @@ import { TelegramBotClient } from '../telegram/bot.js';
 import { getTelegramToken, getTelegramOwnerId } from '../security/credentials.js';
 import { DocumentStore } from '../storage/collection.js';
 import { SessionManager } from '../sessions/manager.js';
+import { DEFAULT_CHAT_USER_ID } from '../storage/chat-store.js';
+import { migrateLegacyChatDb } from '../storage/chat-migration.js';
 import { MemoryManager } from '../memory/manager.js';
 import { KillSwitch } from '../security/kill-switch.js';
 import { OllamaProvider } from '../services/provider.js';
@@ -48,11 +50,17 @@ async function startAll(): Promise<void> {
   });
 
   // 3. Start Local Web Workstation
-  // The web chat shares `memoryManager` with the Telegram bot and writes under the Telegram owner ID,
-  // so the owner profile and session summaries are one memory across both surfaces.
+  // The web chat shares `sessionManager` and `memoryManager` with the Telegram bot and writes under the
+  // Telegram owner ID, so sessions, turns, the owner profile, and summaries are one store across both.
   const ownerId = getTelegramOwnerId();
+  const webUserId = ownerId || DEFAULT_CHAT_USER_ID;
+  try {
+    await migrateLegacyChatDb({ legacyDbPath: path.join(dataDir, 'chat.db'), store, sessionManager, userId: webUserId });
+  } catch (err: unknown) {
+    logger.error(`[ChatMigration] data/chat.db import failed; it is retried on the next start: ${err instanceof Error ? err.message : String(err)}`);
+  }
   const webPort = process.env.PORT ? Number.parseInt(process.env.PORT, 10) : 3000;
-  const webServer = new JarvisWebServer({ port: webPort, memoryManager, userId: ownerId || 'owner' });
+  const webServer = new JarvisWebServer({ port: webPort, sessionManager, memoryManager, userId: webUserId });
   await webServer.start();
   console.log(`[1/3] 🌐 Web Chat UI:     Online at http://localhost:${webPort}`);
 

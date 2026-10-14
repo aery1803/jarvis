@@ -6,6 +6,7 @@ import {
   InlineKeyboardMarkup,
 } from './types.js';
 import { SessionManager } from '../sessions/manager.js';
+import type { NewJarvisMessage } from '../sessions/types.js';
 import { MemoryManager } from '../memory/manager.js';
 import { KillSwitch } from '../security/kill-switch.js';
 import { LLMProvider, OllamaProvider } from '../services/provider.js';
@@ -29,8 +30,10 @@ import {
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 
-/** Turns kept in memory per Telegram session for T0 context. */
-const MAX_TRACKED_TURNS = 60;
+/** Most recent stored turns offered to the context builder (T0); older ones are covered by T2 summaries. */
+const MAX_CONTEXT_TURNS = 60;
+/** `SessionManager` channel key for the active-session pointer, shared with no other surface. */
+const TELEGRAM_CHANNEL = 'telegram';
 
 export interface TelegramBotOptions {
   token: string;
@@ -48,10 +51,6 @@ export class TelegramBotClient {
   private baseUrl: string;
   private isPolling = false;
   private pollingOffset = 0;
-  private activeSessions = new Map<string, string>(); // userId -> sessionId
-  // `SessionManager` stores sessions and tasks but not messages, so the current conversation's turns are
-  // tracked here per `userId:sessionId`; they do not survive a restart (summaries and profile facts do).
-  private conversations = new Map<string, { turns: ConversationTurn[]; messageCount: number }>();
   private searchClient: SearXNGClient;
   private distiller: ContentDistiller;
   private consensus: ConsensusEngine;
@@ -496,7 +495,7 @@ export class TelegramBotClient {
         const title = args.join(' ').trim() || 'New Workspace';
         if (this.options.sessionManager) {
           const sess = await this.options.sessionManager.createSession(userId, title);
-          this.activeSessions.set(userId, sess.id);
+          await this.options.sessionManager.setActiveSession(userId, TELEGRAM_CHANNEL, sess.id);
           await this.sendMessage(chatId, `Created and switched to session: *${sess.title}* (\`${sess.id}\`)`);
         } else {
           await this.sendMessage(chatId, `Session manager not configured.`);
@@ -510,7 +509,7 @@ export class TelegramBotClient {
           if (sessions.length === 0) {
             await this.sendMessage(chatId, `No sessions found. Create one with \`/new <name>\`.`);
           } else {
-            const current = this.activeSessions.get(userId);
+            const current = (await this.options.sessionManager.getActiveSession(userId, TELEGRAM_CHANNEL))?.id;
             const lines = sessions.slice(0, 8).map((s) => {
               const activeMarker = s.id === current ? ' *(active)*' : '';
               return `- *${s.title}*${activeMarker}\n  ID: \`${s.id}\``;
@@ -530,7 +529,7 @@ export class TelegramBotClient {
         if (this.options.sessionManager) {
           const sess = await this.options.sessionManager.getSession(userId, targetId);
           if (sess) {
-            this.activeSessions.set(userId, sess.id);
+            await this.options.sessionManager.setActiveSession(userId, TELEGRAM_CHANNEL, sess.id);
             await this.sendMessage(chatId, `Switched to session: *${sess.title}*`);
           } else {
             await this.sendMessage(chatId, `Session not found: \`${targetId}\``);
@@ -594,12 +593,12 @@ export class TelegramBotClient {
       return;
     }
 
-    // Ensure session exists
-    let sessionId = this.activeSessions.get(userId);
+    // Ensure session exists. The active session is persisted, so after a restart the conversation continues.
+    let sessionId = (await this.options.sessionManager?.getActiveSession(userId, TELEGRAM_CHANNEL))?.id;
     if (!sessionId && this.options.sessionManager) {
       const sess = await this.options.sessionManager.createSession(userId, 'Default Session');
       sessionId = sess.id;
-      this.activeSessions.set(userId, sessionId);
+      await this.options.sessionManager.setActiveSession(userId, TELEGRAM_CHANNEL, sessionId);
     }
 
     // Create task
@@ -616,9 +615,14 @@ export class TelegramBotClient {
 
     const startedAt = Date.now();
     const memorySessionId = sessionId ?? 'default';
-    const turnKey = `${userId}:${memorySessionId}`;
-    const conversation = this.conversations.get(turnKey) ?? { turns: [], messageCount: 0 };
-    const priorTurns = conversation.turns;
+    // History is read before this message is stored, so the prompt is not duplicated into its own context.
+    // It includes turns written by the web chat when the session was started or continued there.
+    const history: ConversationTurn[] =
+      this.options.sessionManager && sessionId
+        ? (await this.options.sessionManager.getMessages(userId, sessionId)).map((m) => ({ role: m.role, content: m.content }))
+        : [];
+    const priorTurns = history.slice(-MAX_CONTEXT_TURNS);
+    await this.saveTurn(userId, sessionId, { role: 'user', content: text });
 
     // Explicit memory writes happen before the context is built, so the fact is usable in this same reply.
     const rememberedFact = parseRememberCommand(text);
@@ -660,6 +664,7 @@ export class TelegramBotClient {
       // Automated research augmentation for questions & factual lookups
       let researchFacts = '';
       let sourcesFooter = '';
+      let sources: string[] = [];
       const lower = text.toLowerCase();
       const isQuestion = lower.includes('?') || ['search', 'find', 'what', 'why', 'how', 'who', 'where', 'when', 'explain', 'tell me', 'lookup', 'research', 'latest', 'news', 'specs', 'architecture'].some((k) => lower.includes(k));
 
@@ -676,6 +681,7 @@ export class TelegramBotClient {
             ]);
             researchFacts = `\n[Verified Research Facts]:\n${extracted.map((e, idx) => `[Source ${idx + 1}]: ${e.content}`).join('\n')}\nConsensus Score: ${(report.overallScore * 100).toFixed(0)}%\n`;
             sourcesFooter = `\n\n📚 *Sources:*\n${extracted.map((e) => `- ${e.url}`).join('\n')}`;
+            sources = extracted.map((e) => e.url);
           }
         } catch {
           // Fallback silently if network/SearXNG offline
@@ -728,13 +734,16 @@ export class TelegramBotClient {
 
       const finalMessage = taskTag ? `${taskTag}\n\n${responseText}${sourcesFooter}` : `${responseText}${sourcesFooter}`;
       await this.sendMessage(chatId, finalMessage);
-      return { responseText, completed };
+      return { responseText, completed, sources };
     });
 
-    // Post-turn memory writes run after the reply is sent, so they never delay it.
-    const turns = [...priorTurns, { role: 'user' as const, content: text }, { role: 'assistant' as const, content: turn.responseText }].slice(-MAX_TRACKED_TURNS);
-    const messageCount = conversation.messageCount + 2;
-    this.conversations.set(turnKey, { turns, messageCount });
+    // Post-turn writes run after the reply is sent, so they never delay it.
+    await this.saveTurn(userId, sessionId, {
+      role: 'assistant',
+      content: turn.responseText,
+      meta: turn.sources.length > 0 ? { sources: turn.sources } : undefined,
+    });
+    const turns: ConversationTurn[] = [...history, { role: 'user', content: text }, { role: 'assistant', content: turn.responseText }];
     if (turn.completed) {
       await recordTaskEpisode(this.options.memoryManager, {
         userId,
@@ -744,7 +753,7 @@ export class TelegramBotClient {
         executionTimeMs: Date.now() - startedAt,
       });
     }
-    if (this.options.llmProvider && this.options.memoryManager && shouldSummarize(messageCount)) {
+    if (this.options.llmProvider && this.options.memoryManager && shouldSummarize(turns.length)) {
       const summarizer = await resolveSummarizer(this.options.llmProvider);
       await summarizeAndStoreSession({
         memory: this.options.memoryManager,
@@ -753,6 +762,21 @@ export class TelegramBotClient {
         sessionId: memorySessionId,
         turns,
       });
+    }
+  }
+
+  /**
+   * Stores a turn in the session. The session can be deleted from the web while a reply is being
+   * generated; the reply still goes out, so a failed write is logged instead of thrown.
+   */
+  private async saveTurn(userId: string, sessionId: string | undefined, message: NewJarvisMessage): Promise<void> {
+    if (!this.options.sessionManager || !sessionId) {
+      return;
+    }
+    try {
+      await this.options.sessionManager.addMessage(userId, sessionId, message);
+    } catch (err: unknown) {
+      logger.warn(`[TelegramBot] ${message.role} turn not saved: ${err instanceof Error ? err.message : String(err)}`, { sessionId });
     }
   }
 

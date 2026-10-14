@@ -9,6 +9,7 @@ import { KillSwitch } from '../src/security/kill-switch.js';
 import { TelegramBotClient } from '../src/telegram/bot.js';
 import { TelegramUpdate } from '../src/telegram/types.js';
 import { MockLLMProvider } from '../src/services/provider.js';
+import { ChatStore } from '../src/storage/chat-store.js';
 
 describe('TelegramBotClient', () => {
   const testDbPath = path.resolve(process.cwd(), 'data', 'test-telegram.db');
@@ -273,6 +274,97 @@ describe('TelegramBotClient', () => {
     const last = prompts.filter((p) => p.includes('User Request:')).at(-1) ?? '';
     assert.ok(last.includes('Fresh start here'));
     assert.ok(!last.includes('TG-ISOLATION-MARKER'));
+  });
+
+  function capturePrompts(): string[] {
+    const prompts: string[] = [];
+    llmProvider.generate = async (prompt: string) => {
+      prompts.push(prompt);
+      return 'Jarvis test answer';
+    };
+    return prompts;
+  }
+
+  const chatPromptsOf = (prompts: string[]) => prompts.filter((p) => p.includes('User Request:'));
+
+  test('chat turns are stored as SessionManager messages of the active session', async () => {
+    await bot.handleUpdate(ownerText(60, 'Plan the grocery run'));
+
+    const owned = await sessions.listSessions('123456789');
+    assert.equal(owned.length, 1);
+    assert.equal(owned[0].title, 'Default Session');
+    const messages = await sessions.getMessages('123456789', owned[0].id);
+    assert.deepEqual(
+      messages.map((m) => [m.role, m.content]),
+      [
+        ['user', 'Plan the grocery run'],
+        ['assistant', 'Jarvis test answer'],
+      ]
+    );
+  });
+
+  test('turns and the active session survive a bot restart', async () => {
+    const prompts = capturePrompts();
+    await bot.handleUpdate(ownerText(61, 'RESTART-MARKER my project is called Jarvis'));
+    const [sessionBefore] = await sessions.listSessions('123456789');
+
+    // Simulates a process restart: a fresh connection, managers, and bot over the same database file.
+    store.close();
+    store = new DocumentStore(testDbPath);
+    sessions = new SessionManager(store);
+    memory = new MemoryManager(store);
+    const restarted = new TelegramBotClient({
+      token: 'mock-test-token',
+      ownerId: '123456789',
+      sessionManager: sessions,
+      memoryManager: memory,
+      killSwitch: new KillSwitch(store, sessions),
+      llmProvider,
+    });
+    restarted.apiCall = bot.apiCall;
+
+    await restarted.handleUpdate(ownerText(62, 'Name the project I mentioned'));
+
+    const afterRestart = chatPromptsOf(prompts).at(-1) ?? '';
+    assert.ok(afterRestart.includes('RESTART-MARKER my project is called Jarvis'), afterRestart);
+    const owned = await sessions.listSessions('123456789');
+    assert.deepEqual(owned.map((s) => s.id), [sessionBefore.id], 'no new Default Session after a restart');
+    assert.equal((await sessions.getMessages('123456789', sessionBefore.id)).length, 4);
+  });
+
+  test('a session started on the web can be continued on Telegram with /switch', async () => {
+    const prompts = capturePrompts();
+    const web = new ChatStore(sessions, '123456789');
+    const webSession = await web.createSession('Started on the web');
+    await web.addMessage({ sessionId: webSession.id!, role: 'user', content: 'WEB-MARKER planning a trip to Goa' });
+    await web.addMessage({ sessionId: webSession.id!, role: 'assistant', content: 'Sounds fun' });
+
+    await bot.handleUpdate(ownerText(70, `/switch ${webSession.id}`));
+    await bot.handleUpdate(ownerText(71, 'Continue the trip plan'));
+
+    const last = chatPromptsOf(prompts).at(-1) ?? '';
+    assert.ok(last.includes('WEB-MARKER planning a trip to Goa'), last);
+    const webView = await web.getMessages(webSession.id!);
+    assert.deepEqual(webView.slice(2).map((m) => [m.role, m.content]), [
+      ['user', 'Continue the trip plan'],
+      ['assistant', 'Jarvis test answer'],
+    ]);
+  });
+
+  test('deleting the active session elsewhere starts a fresh Telegram session', async () => {
+    const prompts = capturePrompts();
+    await bot.handleUpdate(ownerText(80, 'DELETED-MARKER soon to be gone'));
+    const [first] = await sessions.listSessions('123456789');
+    await sessions.deleteSession('123456789', first.id);
+
+    await bot.handleUpdate(ownerText(81, 'Starting over'));
+
+    const last = chatPromptsOf(prompts).at(-1) ?? '';
+    assert.ok(!last.includes('DELETED-MARKER'), last);
+    const owned = await sessions.listSessions('123456789');
+    assert.equal(owned.length, 1);
+    assert.notEqual(owned[0].id, first.id);
+    assert.equal((await sessions.getMessages('123456789', owned[0].id)).length, 2);
   });
 
   test('"remember that ..." stores a profile fact', async () => {

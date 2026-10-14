@@ -1,14 +1,45 @@
+import crypto from 'node:crypto';
 import { DocumentStore, Collection } from '../storage/collection.js';
-import { JarvisSession, JarvisTask, TaskStatus } from './types.js';
+import {
+  ActiveSessionPointer,
+  ImportedJarvisMessage,
+  JarvisMessage,
+  JarvisSession,
+  JarvisTask,
+  NewJarvisMessage,
+  TaskStatus,
+} from './types.js';
+
+export class SessionNotFoundError extends Error {
+  constructor(
+    public readonly userId: string,
+    public readonly sessionId: string
+  ) {
+    super(`Session ${sessionId} not found for user ${userId}`);
+    this.name = 'SessionNotFoundError';
+  }
+}
+
+/** An imported session's id already belongs to another user. */
+export class SessionConflictError extends Error {
+  constructor(public readonly sessionId: string) {
+    super(`Cannot import session ${sessionId}: the id is owned by another user`);
+    this.name = 'SessionConflictError';
+  }
+}
 
 export class SessionManager {
   private sessionCollection: Collection<JarvisSession>;
   private taskCollection: Collection<JarvisTask>;
+  private messageCollection: Collection<JarvisMessage>;
+  private activeSessionCollection: Collection<ActiveSessionPointer>;
   private nextTaskNumber = 1;
 
   constructor(private store: DocumentStore) {
     this.sessionCollection = this.store.getCollection<JarvisSession>('sessions');
     this.taskCollection = this.store.getCollection<JarvisTask>('tasks');
+    this.messageCollection = this.store.getCollection<JarvisMessage>('messages');
+    this.activeSessionCollection = this.store.getCollection<ActiveSessionPointer>('active_sessions');
   }
 
   // --- Session Management ---
@@ -48,9 +79,102 @@ export class SessionManager {
     const deleted = await this.sessionCollection.deleteOne({ userId, id: sessionId });
     if (deleted) {
       await this.taskCollection.deleteMany({ userId, sessionId });
+      await this.messageCollection.deleteMany({ userId, sessionId });
+      await this.activeSessionCollection.deleteMany({ userId, sessionId });
       return true;
     }
     return false;
+  }
+
+  // --- Conversation Messages ---
+
+  /**
+   * Appends a turn to the user's session and bumps the session's `updatedAt`. Throws
+   * `SessionNotFoundError` when the session does not exist for this user, so a caller can never write
+   * into another user's session.
+   */
+  async addMessage(userId: string, sessionId: string, message: NewJarvisMessage): Promise<JarvisMessage> {
+    // No `await` between the count and the insert: another turn for the same session (a second browser
+    // tab, Telegram) could otherwise run in between and take the same `seq`.
+    if (!this.sessionCollection.findOne({ userId, id: sessionId })) {
+      throw new SessionNotFoundError(userId, sessionId);
+    }
+    const now = new Date().toISOString();
+    const record: JarvisMessage = {
+      id: `msg-${crypto.randomUUID()}`,
+      userId,
+      sessionId,
+      seq: this.messageCollection.count({ userId, sessionId }) + 1,
+      role: message.role,
+      content: message.content,
+      createdAt: now,
+      meta: message.meta,
+    };
+    this.messageCollection.insertOne(record);
+    this.sessionCollection.updateOne({ userId, id: sessionId }, { updatedAt: now });
+    return record;
+  }
+
+  /** The session's turns, oldest first; empty for a session that is missing or belongs to another user. */
+  async getMessages(userId: string, sessionId: string): Promise<JarvisMessage[]> {
+    const messages = await this.messageCollection.find({ userId, sessionId });
+    return messages.sort((a, b) => a.seq - b.seq);
+  }
+
+  /**
+   * Imports a session and its messages (oldest first) with their original ids and timestamps, skipping
+   * anything already imported, so an interrupted import can be run again. Each call is one transaction.
+   * `insertOne` replaces by id, so an id that already belongs to another user is refused with
+   * `SessionConflictError` instead of being overwritten.
+   */
+  async importSession(
+    session: JarvisSession,
+    messages: ImportedJarvisMessage[]
+  ): Promise<{ sessionImported: boolean; messagesImported: number }> {
+    return this.store.transaction(() => {
+      const existing = this.sessionCollection.findOne({ id: session.id });
+      if (existing && existing.userId !== session.userId) {
+        throw new SessionConflictError(session.id);
+      }
+      if (!existing) {
+        this.sessionCollection.insertOne(session);
+      }
+
+      let seq = this.messageCollection.count({ userId: session.userId, sessionId: session.id });
+      let messagesImported = 0;
+      for (const message of messages) {
+        if (this.messageCollection.findOne({ id: message.id })) {
+          continue;
+        }
+        seq++;
+        this.messageCollection.insertOne({ ...message, userId: session.userId, sessionId: session.id, seq });
+        messagesImported++;
+      }
+      return { sessionImported: !existing, messagesImported };
+    });
+  }
+
+  // --- Active Session per Channel ---
+
+  /** Points a user's channel (e.g. `telegram`) at one of their sessions; false if the session is not theirs. */
+  async setActiveSession(userId: string, channel: string, sessionId: string): Promise<boolean> {
+    if (!(await this.getSession(userId, sessionId))) {
+      return false;
+    }
+    await this.activeSessionCollection.insertOne({
+      id: `${channel}:${userId}`,
+      userId,
+      channel,
+      sessionId,
+      updatedAt: new Date().toISOString(),
+    });
+    return true;
+  }
+
+  /** The session the channel last pointed at, or null if none was set or that session has since been deleted. */
+  async getActiveSession(userId: string, channel: string): Promise<JarvisSession | null> {
+    const pointer = await this.activeSessionCollection.findOne({ id: `${channel}:${userId}` });
+    return pointer ? this.getSession(userId, pointer.sessionId) : null;
   }
 
   // --- Task Queue & Scheduling ---
