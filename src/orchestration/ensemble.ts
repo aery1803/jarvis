@@ -45,7 +45,10 @@ export class MultiModelEnsemble {
     prompt: string,
     options: EnsembleOptions = {}
   ): Promise<EnsembleResult> {
-    const defaultModels = ['qwen2.5:7b', 'qwen2.5-coder:7b'];
+    const isCode = options.taskType === 'code';
+    const defaultModels = isCode
+      ? ['qwen2.5-coder:7b', 'qwen2.5:14b']
+      : ['qwen2.5:7b', 'qwen2.5:14b'];
     const targetModels = options.models && options.models.length > 0 ? options.models : defaultModels;
 
     logger.info(`[MultiModelEnsemble] Dispatching simultaneous inference across ${targetModels.length} models: [${targetModels.join(', ')}]`);
