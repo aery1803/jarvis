@@ -87,6 +87,22 @@ export class ModelRegistry {
       notes: 'Specialized reasoning engine with explicit <think> tokens',
     });
 
+    // 2c. Precision 30B-Class Heavy Engineering Lane - Qwen 2.5 Coder 32B (Authority: PHASE_0_SPEC.md)
+    this.register({
+      id: 'qwen2.5-coder:32b',
+      name: 'Qwen 2.5 Coder 32B Instruct',
+      lane: 'deep',
+      family: 'qwen',
+      parameterSize: '32B',
+      quantization: 'q4_k_m',
+      memoryRequirementBytes: 19.0 * 1024 * 1024 * 1024, // ~19 GB, fits in 46.5 GB Vulkan pool
+      contextLength: 32768,
+      measuredTokensPerSec: 18.4,
+      strengths: ['precision engineering', 'full architecture design', 'multi-file refactoring', 'mathematical proofs', 'complex TDD'],
+      isPrimary: false,
+      notes: 'Precision 30B-class heavy model from initial concept doc',
+    });
+
     // 3. Fast General Assistant Lane
     this.register({
       id: 'qwen2.5:3b',

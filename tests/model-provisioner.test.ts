@@ -82,4 +82,19 @@ describe('ModelProvisioner (On-Demand JIT Model Dispatch)', () => {
     assert.ok(progressMessages[0].includes('Auto-downloading'));
     assert.ok(progressMessages[1].includes('installed successfully'));
   });
+
+  test('should escalate precise work to 30B-class model qwen2.5-coder:32b', () => {
+    const mockProvider = new MockLLMProvider();
+    const provisioner = new ModelProvisioner(mockProvider);
+
+    const c1 = provisioner.classifyTask('Design a full architecture system blueprint with multi-file precision engineering');
+    assert.equal(c1.model, 'qwen2.5-coder:32b');
+    assert.equal(c1.category, 'precision');
+    assert.equal(c1.is30BClass, true);
+
+    const c2 = provisioner.classifyTask('I need a precise production grade implementation of the consensus engine');
+    assert.equal(c2.model, 'qwen2.5-coder:32b');
+    assert.equal(c2.category, 'precision');
+    assert.equal(c2.is30BClass, true);
+  });
 });

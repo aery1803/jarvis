@@ -224,7 +224,7 @@ export class JarvisWebServer {
 
     // Dynamic JIT model routing & on-demand provisioning
     let activeModel = model;
-    let taskCategory: 'code' | 'reasoning' | 'chat' | 'vision' = 'chat';
+    let taskCategory: 'precision' | 'code' | 'reasoning' | 'chat' | 'vision' = 'chat';
 
     if (!activeModel) {
       const defaultProvider = new OllamaProvider({ baseUrl: config.ollamaBaseUrl });
@@ -249,7 +249,7 @@ export class JarvisWebServer {
     });
 
     const fullPrompt = CognitionEngine.formatPrompt(prompt, {
-      taskType: taskCategory === 'code' ? 'code' : taskCategory === 'reasoning' ? 'reasoning' : shouldResearch ? 'research' : 'chat',
+      taskType: taskCategory === 'precision' || taskCategory === 'code' ? 'code' : taskCategory === 'reasoning' ? 'reasoning' : shouldResearch ? 'research' : 'chat',
       researchFacts: researchContext,
       activeModel,
     });
