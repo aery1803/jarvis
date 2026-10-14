@@ -1343,13 +1343,14 @@ Decision: **Claude writes everything the blueprint needs; the owner's local AI b
 #### Part F: Rules and Housekeeping (P16 to P18)
 
 ##### P16. Coding rules
-- [ ] Write initial rules in `docs/rules/CODING_RULES.md`, or approve Claude's default template.
-- **Done when:** The coding rules document exists in the repository.
+- [x] **Status: VERIFIED & COMPLETED**
+  - Standard engineering rules defined in `docs/rules/CODING_RULES.md` (covering living context, TDD, zero-secrets hygiene, taint tracking, Action Gateway tiers, dependency discipline, and commit conventions).
 
 ##### P17. Secrets hygiene
-- [ ] Place `.gitignore` blocking any `.env`, tokens, keys, and session files.
-- [ ] Store configuration outside the repo folder (e.g. `%USERPROFILE%\.jarvis\settings.env`).
-- **Done when:** Confirmed that `git status` displays no secrets.
+- [x] **Status: VERIFIED & COMPLETED**
+  - Comprehensive `.gitignore` created blocking credentials, `.env` files, model weights (`*.gguf`), databases, caches, and runtime data.
+  - Secrets storage designated strictly in Windows Credential Manager and `%USERPROFILE%\.jarvis\settings.env`.
+  - Verified via `git status` that no secret is tracked.
 
 ##### P18. The project folder
 - [x] **Status: VERIFIED & COMPLETED**
@@ -1376,8 +1377,8 @@ P12 two bots created, numeric Telegram ID: Pending
 P13 test Gmail address: Pending
 P14 extensions and versions: Pending Phase 0 spec
 P15 model roster note done: Pending Phase 0 spec
-P16 coding rules: Pending default template approval
-P17 secrets locations decided: Windows Credential Manager + %USERPROFILE%\.jarvis\settings.env
+P16 coding rules: Done (docs/rules/CODING_RULES.md established)
+P17 secrets locations decided: Done (Credential Manager + %USERPROFILE%\.jarvis\settings.env + .gitignore verified)
 P18 project folder path: c:\Users\aery1\Files\Projects\jarvis
 ```
 

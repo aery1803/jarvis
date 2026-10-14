@@ -1,0 +1,112 @@
+# ==============================================================================
+# Jarvis Local AI Agent: Git Ignore Configuration (Secrets Hygiene & Runtime Data)
+# Matches: jarvis-master-context.md Section 6.3, 17.10, 22.2 (P17)
+# ==============================================================================
+
+# --- Secrets, Credentials, and Environment Files (NEVER COMMIT) ---
+*.env
+*.env.*
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+settings.env
+*.pem
+*.key
+*.cert
+*.token
+*.pfx
+credentials.json
+token.json
+secrets/
+
+# --- Model Weights, Checkpoints, and Large Binaries (Stored Externally) ---
+models/
+weights/
+*.gguf
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.onnx
+*.ckpt
+
+# --- Persistent Data, Local Memory Databases, and Vector Stores ---
+data/
+data/memory/
+data/sessions/
+data/rag/
+*.sqlite
+*.sqlite3
+*.db
+*.db-journal
+*.db-wal
+vector_store/
+chroma/
+lancedb/
+
+# --- Dependencies ---
+node_modules/
+jspm_packages/
+.pnp
+.pnp.js
+
+# --- Build Outputs, Bundles, and Compilations ---
+dist/
+build/
+out/
+coverage/
+.nyc_output/
+*.tsbuildinfo
+
+# --- Logs, Debug, and Diagnostic Dumps ---
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# --- Browser Automation & Playwright Profiles (Session Cookies & Storage) ---
+playwright-report/
+test-results/
+.playwright/
+browser-profiles/
+userDataDir/
+
+# --- Python / ML Virtual Environments & Caches ---
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+env/
+.pytest_cache/
+
+# --- Operating System & Temporary Files ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+
+# --- IDE & Editor Settings ---
+.idea/
+*.sublime-project
+*.sublime-workspace
+.vscode/*
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/settings.json
