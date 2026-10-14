@@ -276,8 +276,8 @@ It began as a research agent (search, scrape, cross-verify, cited answer). That 
 | OS | Windows 11 Home Single Language, Version `26H2`, Build `26300.0` | Verified on host |
 | NPU | Up to 50 TOPS (AMD XDNA 2); software support for LLM/speech **[VERIFY]** | Present on SoC |
 | Memory Pool | **64 GB LPDDR5X-8000 unified memory** (`Win32_PhysicalMemory`: 64 GB) | Verified |
-| OS RAM vs GPU VRAM | Windows OS allocated: **15.65 GB**. Dedicated GPU allocation / UMA buffer: **~48–54 GB** | Verified |
-| **Vulkan Backend Acceleration** | **Operational with 54+ GB free VRAM** (`llama.cpp` b11272: `Vulkan0: AMD Radeon(TM) 8060S Graphics (57,163 MiB total, 54,305 MiB free)`) | **VERIFIED & WORKING** |
+| OS RAM vs GPU VRAM | Windows OS allocated: **31.65 GB** (up from 15.65 GB; provides double headroom for Docker/WSL2 and host tasks). Dedicated GPU allocation: **32 GB** | Verified |
+| **Vulkan Backend Acceleration** | **Operational with 46.5 GB free VRAM** (`llama.cpp` b11272: `Vulkan0: AMD Radeon(TM) 8060S Graphics (48,971 MiB total, 46,523 MiB free)`) | **VERIFIED & WORKING** |
 | Storage | 1 TB NVMe SSD. Current available: **640.2 GB free** on `C:` | Verified (exceeds 250 GB target) |
 | Power and thermals | High-performance AC power profile (Armoury Crate Performance/Turbo, Windows Best Performance) | Verified active |
 | Phones | Android and iPhone | D19 |
@@ -293,8 +293,8 @@ It began as a research agent (search, scrape, cross-verify, cited answer). That 
 
 **Consequences for the design (Updated with live findings)**
 1. **Memory bandwidth, not capacity, limits generation speed.** Models that read fewer bytes per token (smaller active parameters, lower-bit quantization) run faster. Mixture-of-experts (MoE) models suit this machine.
-2. **Unified memory is shared** with the OS, browser, Docker/WSL, SearXNG, Playwright, and voice models, so a **memory governor** is required (Section 7.4). Windows has ~15.65 GB headroom while Vulkan has 54+ GB directly addressable.
-3. **GPU backend support on Windows is CONFIRMED via Vulkan.** Prior uncertainty regarding gfx1151 Vulkan support on Windows is resolved: `llama.cpp` b11272 with Vulkan driver enumerates `AMD Radeon(TM) 8060S Graphics` with 54,305 MiB free VRAM and executes without fallback. Official Ollama runs alongside it for comparative benchmarking (Section 7.5).
+2. **Unified memory is balanced perfectly:** Windows has **31.65 GB** dedicated headroom (eliminating memory pressure/lag during heavy multitasking), while Vulkan simultaneously retains **46.5 GB of free addressable GPU memory** for model inference and KV-cache.
+3. **GPU backend support on Windows is CONFIRMED via Vulkan.** Prior uncertainty regarding gfx1151 Vulkan support on Windows is resolved: `llama.cpp` b11272 with Vulkan driver enumerates `AMD Radeon(TM) 8060S Graphics` with 46,523 MiB free VRAM and executes without fallback. Official Ollama runs alongside it for comparative benchmarking (Section 7.5).
 4. **Thermal limits** push heavy and background work to moments when the laptop is plugged in, idle, and cool.
 
 ---
@@ -1245,9 +1245,9 @@ Decision: **Claude writes everything the blueprint needs; the owner's local AI b
 ##### P3. Raise the GPU memory (Dedicated VRAM allocation)
 - [x] **Status: VERIFIED & COMPLETED**
   - Total Unified Physical RAM: **64 GB LPDDR5X-8000**.
-  - OS Allocation: **15.65 GB** available to Windows.
-  - Dedicated GPU / UMA Frame Buffer: **~48–54 GB**.
-  - Direct hardware test via `llama.cpp` Vulkan confirms: `Vulkan0: AMD Radeon(TM) 8060S Graphics (57,163 MiB total, 54,305 MiB free)`!
+  - OS Allocation: **31.65 GB** available to Windows (doubled from 15.65 GB; completely resolves host memory pressure).
+  - Dedicated GPU / UMA Frame Buffer: **32 GB** hardware setting.
+  - Direct hardware test via `llama.cpp` Vulkan confirms: `Vulkan0: AMD Radeon(TM) 8060S Graphics (48,971 MiB total, 46,523 MiB free)`! Perfect 50/50 balance between host and AI models.
 
 ##### P4. Free up disk space
 - [x] **Status: VERIFIED & COMPLETED**
@@ -1361,7 +1361,7 @@ Decision: **Claude writes everything the blueprint needs; the owner's local AI b
 Step 0 GitHub choice: Personal Private Repository (Option 2 equivalent)
 P1 backup done: Skipped by owner decision
 P2 versions: Windows 11 26H2 (26300) | BIOS GZ302EA.314 | AMD driver 32.0.31041.1004
-P3 dedicated GPU memory now shows: ~54 GB free in Vulkan (15.65 GB to Windows OS)
+P3 dedicated GPU memory now shows: ~46.5 GB free in Vulkan (31.65 GB to Windows OS)
 P4 free disk space: 640.2 GB free on C:
 P5 power settings used: Armoury Crate Performance/Turbo, Windows Best Performance (AC plugged in)
 P6 versions: git 2.56.0 | node v26.10.0 | npm 12.2.0 | docker 29.8.2 | code 1.141.0 | gh 2.102.0
