@@ -53,7 +53,7 @@ describe('EvaluationHarness & Benchmark Suite', () => {
       'three action execution tiers': 'Tier 1 is safe read-only, Tier 2 requires owner approval, and Tier 3 is strictly forbidden.',
     };
 
-    const mockProvider = new MockLLMProvider({ model: 'qwen2.5-coder:1.5b' });
+    const mockProvider = new MockLLMProvider({ model: 'qwen2.5-coder:7b' });
     mockProvider.generate = async (prompt: string) => {
       for (const [key, val] of Object.entries(mockResponses)) {
         if (prompt.toLowerCase().includes(key.toLowerCase())) {
@@ -66,7 +66,7 @@ describe('EvaluationHarness & Benchmark Suite', () => {
     const suite = new ModelBenchmarkSuite();
     const scorecard = await suite.runBenchmark(mockProvider);
 
-    assert.equal(scorecard.modelName, 'qwen2.5-coder:1.5b');
+    assert.equal(scorecard.modelName, 'qwen2.5-coder:7b');
     assert.ok(scorecard.overallScore >= 90);
     assert.equal(scorecard.grade, 'A+');
     assert.ok(scorecard.estimatedTokensPerSec >= 0);
@@ -90,13 +90,14 @@ describe('EvaluationHarness & Benchmark Suite', () => {
     assert.ok(sysPrompt.includes('Step-by-Step Thinking'));
     assert.ok(sysPrompt.includes('Software Engineering Excellence'));
     assert.ok(sysPrompt.includes('Coding Lane Directives'));
+    assert.ok(sysPrompt.includes('English Language Mandate'));
 
     const fullPrompt = CognitionEngine.formatPrompt('Implement a binary search tree in TypeScript', {
       taskType: 'code',
       memoryContext: 'Owner prefers functional style',
       researchFacts: '[Source 1]: BST algorithm standard implementation',
       consensusScore: 0.95,
-      activeModel: 'qwen2.5-coder:1.5b',
+      activeModel: 'qwen2.5-coder:7b',
     });
 
     assert.ok(fullPrompt.includes('Owner prefers functional style'));

@@ -41,7 +41,7 @@ To stop everything, simply press **Ctrl + C** in your terminal.
 1. Run `npm start` (or `npm run web`).
 2. Open [`http://localhost:3000`](http://localhost:3000) in Chrome, Edge, or Brave.
 3. Pick your model:
-   - ⚡ **`qwen2.5-coder:1.5b` (Fast Lane):** Super fast (141 words per second!) for writing code and quick tasks.
+   - 💻 **`qwen2.5-coder:7b` (Code Lane):** Heavyweight coding brain for complete scripts, bug fixes, and testing.
    - 🧠 **`qwen2.5:7b` (Reasoning Lane):** Deep thinker for big questions, essays, and analysis.
 4. Type anything you want! The **Web Research** toggle will automatically fact-check your questions on the web and show you source links.
 
@@ -52,7 +52,7 @@ To stop everything, simply press **Ctrl + C** in your terminal.
    - `/help` — Shows the cheat sheet of what Jarvis can do.
    - `/status` — Shows laptop battery, memory, and temperature.
    - `/models` — Lists all the smart AI models installed.
-   - `/model qwen2.5-coder:1.5b` — Switches to the code-writing model!
+   - `/model qwen2.5-coder:7b` — Switches to the code-writing model!
    - `/benchmark [model]` — Tests reasoning, coding, and speed, giving a real scorecard!
    - `/research <topic>` — Conducts a deep internet investigation and gives you a summary with sources.
    - `/kill` — Emergency stop button that halts all background tasks.

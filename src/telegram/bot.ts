@@ -282,7 +282,7 @@ export class TelegramBotClient {
             `- \`/status\` - Workstation specs, free memory & state\n` +
             `- \`/id\` - Show your numeric Telegram User ID\n` +
             `- \`/models\` - List available local models\n` +
-            `- \`/model <name>\` - Switch active model (e.g. qwen2.5-coder:1.5b)\n` +
+            `- \`/model <name>\` - Switch active model (e.g. qwen2.5-coder:7b)\n` +
             `- \`/benchmark [model]\` - Run intelligence benchmark & report score\n` +
             `- \`/research <query>\` - Run multi-source research on any topic\n` +
             `- \`/new <name>\` - Start a new isolated workspace session\n` +
@@ -297,7 +297,7 @@ export class TelegramBotClient {
         break;
 
       case '/models': {
-        const models = this.options.llmProvider?.listModels ? await this.options.llmProvider.listModels() : ['qwen2.5:7b', 'qwen2.5-coder:1.5b'];
+        const models = this.options.llmProvider?.listModels ? await this.options.llmProvider.listModels() : ['qwen2.5:7b', 'qwen2.5-coder:7b'];
         const current = this.options.llmProvider?.getModel?.() ?? 'qwen2.5:7b';
         const modelList = models.map((m) => `- \`${m}\`${m === current ? ' *(active)*' : ''}`).join('\n');
         await this.sendMessage(

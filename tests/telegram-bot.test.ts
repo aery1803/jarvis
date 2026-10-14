@@ -210,12 +210,12 @@ describe('TelegramBotClient', () => {
         from: { id: 123456789, is_bot: false, first_name: 'Owner' },
         chat: { id: 123456789, type: 'private' },
         date: 12346,
-        text: '/model qwen2.5-coder:1.5b',
+        text: '/model qwen2.5-coder:7b',
       },
     };
 
     await bot.handleUpdate(switchUpdate);
-    assert.equal(llmProvider.getModel(), 'qwen2.5-coder:1.5b');
+    assert.equal(llmProvider.getModel(), 'qwen2.5-coder:7b');
   });
 
   test('should handle regular chat messages with answer generation', async () => {

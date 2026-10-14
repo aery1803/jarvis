@@ -13,10 +13,10 @@ describe('ModelRegistry', () => {
     assert.equal(qwen7b.lane, 'balanced');
     assert.equal(qwen7b.measuredTokensPerSec, 41.2);
 
-    const qwenCoder = registry.getModel('qwen2.5-coder:1.5b');
+    const qwenCoder = registry.getModel('qwen2.5-coder:7b');
     assert.ok(qwenCoder);
     assert.equal(qwenCoder.lane, 'code');
-    assert.equal(qwenCoder.measuredTokensPerSec, 141.0);
+    assert.equal(qwenCoder.parameterSize, '7B');
   });
 
   test('should return primary and alternate models for each lane', () => {

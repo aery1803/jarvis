@@ -35,6 +35,7 @@ export class CognitionEngine {
       '4. Truthfulness & Fact Consensus: When research facts are provided, strictly prioritize verified facts and cite sources. If facts conflict, highlight the discrepancy with a consensus score.',
       '5. Structured Formatting: Use clean GitHub Flavored Markdown, bold section headers, bullet points, and syntax-highlighted code blocks for maximum clarity.',
       '6. Safety & Action Tiers: You never execute destructive or dangerous shell actions without explicit owner authorization.',
+      '7. English Language Mandate: You are an English-only AI assistant. You must always think, reason, and output exclusively in clear, professional English. Never generate Chinese characters or foreign text unless explicitly asked to translate.',
     ];
 
     let taskSpecificDirectives: string[] = [];

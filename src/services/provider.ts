@@ -123,7 +123,7 @@ export class OllamaProvider implements LLMProvider {
     } catch {
       // Return local default shortlist
     }
-    return [this.model, 'qwen2.5-coder:1.5b'];
+    return [this.model, 'qwen2.5-coder:7b'];
   }
 
   public async pullModel(modelName: string): Promise<boolean> {
@@ -344,7 +344,7 @@ export class MockLLMProvider implements LLMProvider {
   }
 
   public async listModels(): Promise<string[]> {
-    return [this.model, 'mock-qwen2.5-coder:1.5b'];
+    return [this.model, 'mock-qwen2.5-coder:7b'];
   }
 
   public async pullModel(_name: string): Promise<boolean> {

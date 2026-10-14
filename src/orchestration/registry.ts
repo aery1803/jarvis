@@ -39,22 +39,6 @@ export class ModelRegistry {
       notes: 'Primary heavy coding model',
     });
 
-    // 1b. Fast / Lightweight Code Lane - Qwen 2.5 Coder 1.5B (141 t/s)
-    this.register({
-      id: 'qwen2.5-coder:1.5b',
-      name: 'Qwen 2.5 Coder 1.5B',
-      lane: 'code',
-      family: 'qwen',
-      parameterSize: '1.5B',
-      quantization: 'q4_k_m',
-      memoryRequirementBytes: 1.2 * 1024 * 1024 * 1024,
-      contextLength: 32768,
-      measuredTokensPerSec: 141.0,
-      strengths: ['code autocomplete', 'fast tool extraction', 'light reasoning'],
-      isPrimary: false,
-      notes: 'Ultra-fast autocomplete and lightweight agent worker',
-    });
-
     // 2. Balanced / Reasoning Lane - Verified on Radeon 8060S (41.2 t/s)
     this.register({
       id: 'qwen2.5:7b',

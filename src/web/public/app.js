@@ -354,7 +354,7 @@ async function loadModels() {
       data.models.forEach((m) => {
         const opt = document.createElement('option');
         opt.value = m;
-        const lane = m.includes('coder') ? '(Code Lane - 141 t/s)' : '(Reasoning Lane - 41 t/s)';
+        const lane = m.includes('coder') ? '(Code Lane - ~38 t/s)' : '(Reasoning Lane - ~41 t/s)';
         opt.textContent = `${m} ${lane}`;
         if (m === data.active || m.includes('7b')) {
           opt.selected = true;

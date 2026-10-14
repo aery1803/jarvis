@@ -16,7 +16,7 @@ describe('ChatStore', () => {
 
   test('should create and retrieve chat sessions', () => {
     const session1 = store.createSession('Research on Vulkan', 'qwen2.5:7b');
-    const session2 = store.createSession('Coding Dev Agent', 'qwen2.5-coder:1.5b');
+    const session2 = store.createSession('Coding Dev Agent', 'qwen2.5-coder:7b');
 
     assert.ok(session1.id);
     assert.equal(session1.title, 'Research on Vulkan');

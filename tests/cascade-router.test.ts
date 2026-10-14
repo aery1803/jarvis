@@ -40,7 +40,7 @@ describe('CascadeRouter & MemoryGovernor', () => {
 
   test('should cascade down to lighter model when heavy model exceeds memory headroom', async () => {
     const registry = new ModelRegistry();
-    // Simulate memory headroom restriction: 3 GB free (qwen2.5:7b requires ~4.8 GB so it won't fit, but 1.5B requires 1.2 GB and fits)
+    // Simulate memory headroom restriction: 2.5 GB free (qwen2.5:7b requires ~4.8 GB so it won't fit, but 3B requires 2.2 GB and fits)
     const checker = new CapabilityChecker({ minHeadroomBytes: 1024 * 1024 });
     checker.getFreeMemory = () => 2.5 * 1024 * 1024 * 1024; // 2.5 GB free
     const governor = new MemoryGovernor({ capabilityChecker: checker, pacingDelayMs: 0 });
