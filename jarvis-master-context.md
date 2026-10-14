@@ -1299,12 +1299,10 @@ Decision: **Claude writes everything the blueprint needs; the owner's local AI b
   - **Nine Repository Labels:** Created and verified on `aery1803/jarvis` (`concept-complete`, `ai-working`, `needs-owner`, `blocked`, `bug`, `release-approved`, `ai-proposed`, `ai-authored`, `owner-approved`).
 
 ##### P11. The limited token (Windows Credential Manager)
-- [ ] Generate a Personal Access Token on GitHub (with `repo` and `project` access, $\le 90$ day expiry).
-- [ ] Store it in **Windows Credential Manager**: Control Panel > Credential Manager > Windows Credentials > Add a generic credential:
-  - **Address:** `jarvis-github`
-  - **User name:** `token`
-  - **Password:** `<YOUR_TOKEN>`
-- **Done when:** Token is securely stored in Windows Credential Manager and never committed to git.
+- [x] **Status: VERIFIED & COMPLETED**
+  - Personal Access Token created on GitHub with `repo` and `project` permissions.
+  - Stored securely in Windows Credential Manager under target `jarvis-github` (user: `token`).
+  - No secret committed to repository or exposed in logs.
 
 ---
 
@@ -1372,7 +1370,7 @@ P8 organization and repository names: aery1803/jarvis (Private)
 P8 branches main and master exist: Yes (both active and synchronized on origin)
 P9 branch protection: Skipped (free plan; guarded by Jarvis Action Gateway)
 P10 board has the five columns, Type field, nine labels: Yes (Board #2 created, linked to repo, 5 columns & 9 labels active)
-P11 token created, stored in Credential Manager: In progress
+P11 token created, stored in Credential Manager: Yes (target jarvis-github)
 P12 two bots created, numeric Telegram ID: Pending
 P13 test Gmail address: Pending
 P14 extensions and versions: Pending Phase 0 spec
