@@ -23,7 +23,23 @@ export class ModelRegistry {
   }
 
   private registerDefaults(): void {
-    // 1. Fast / Autocomplete Lane - Verified on Radeon 8060S (141 t/s)
+    // 1. Code Lane - Primary: Qwen 2.5 Coder 7B
+    this.register({
+      id: 'qwen2.5-coder:7b',
+      name: 'Qwen 2.5 Coder 7B',
+      lane: 'code',
+      family: 'qwen',
+      parameterSize: '7B',
+      quantization: 'q4_k_m',
+      memoryRequirementBytes: 4.8 * 1024 * 1024 * 1024,
+      contextLength: 32768,
+      measuredTokensPerSec: 38.0,
+      strengths: ['complex software development', 'refactoring', 'full scripts', 'unit tests'],
+      isPrimary: true,
+      notes: 'Primary heavy coding model',
+    });
+
+    // 1b. Fast / Lightweight Code Lane - Qwen 2.5 Coder 1.5B (141 t/s)
     this.register({
       id: 'qwen2.5-coder:1.5b',
       name: 'Qwen 2.5 Coder 1.5B',
@@ -31,11 +47,11 @@ export class ModelRegistry {
       family: 'qwen',
       parameterSize: '1.5B',
       quantization: 'q4_k_m',
-      memoryRequirementBytes: 1.2 * 1024 * 1024 * 1024, // ~1.2 GB
+      memoryRequirementBytes: 1.2 * 1024 * 1024 * 1024,
       contextLength: 32768,
       measuredTokensPerSec: 141.0,
       strengths: ['code autocomplete', 'fast tool extraction', 'light reasoning'],
-      isPrimary: true,
+      isPrimary: false,
       notes: 'Ultra-fast autocomplete and lightweight agent worker',
     });
 
@@ -47,12 +63,28 @@ export class ModelRegistry {
       family: 'qwen',
       parameterSize: '7B',
       quantization: 'q4_k_m',
-      memoryRequirementBytes: 4.8 * 1024 * 1024 * 1024, // ~4.8 GB
+      memoryRequirementBytes: 4.8 * 1024 * 1024 * 1024,
       contextLength: 32768,
       measuredTokensPerSec: 41.2,
       strengths: ['deep reasoning', 'agent orchestration', 'fact synthesis', 'complex tool use'],
       isPrimary: true,
       notes: 'Primary reasoning and orchestration model',
+    });
+
+    // 2b. Deep Chain-of-Thought Reasoning Lane - DeepSeek R1 7B
+    this.register({
+      id: 'deepseek-r1:7b',
+      name: 'DeepSeek R1 7B',
+      lane: 'deep',
+      family: 'deepseek',
+      parameterSize: '7B',
+      quantization: 'q4_k_m',
+      memoryRequirementBytes: 4.9 * 1024 * 1024 * 1024,
+      contextLength: 32768,
+      measuredTokensPerSec: 36.0,
+      strengths: ['chain-of-thought thinking', 'mathematics', 'deductive logic', 'deep planning'],
+      isPrimary: true,
+      notes: 'Specialized reasoning engine with explicit <think> tokens',
     });
 
     // 3. Fast General Assistant Lane

@@ -14,6 +14,7 @@ import { ContentDistiller } from '../services/scraper.js';
 import { ConsensusEngine } from '../services/consensus.js';
 import { CognitionEngine } from '../agents/cognition.js';
 import { ModelBenchmarkSuite } from '../eval/benchmark.js';
+import { ModelProvisioner } from '../orchestration/provisioner.js';
 import { config } from '../config.js';
 
 export interface TelegramBotOptions {
@@ -537,17 +538,25 @@ export class TelegramBotClient {
       contextPrompt = ctx.systemPromptAdditions;
     }
 
-    // Dynamic model routing: if code requested, route to code lane
-    const lower = text.toLowerCase();
-    const isCode = ['code', 'script', 'function', 'class', 'write', 'implement', 'typescript', 'python', 'powershell', 'fix', 'bug', 'refactor', 'rewrite'].some((k) => lower.includes(k));
+    // Dynamic JIT model routing & on-demand provisioning
+    let activeTaskType: 'chat' | 'code' | 'reasoning' = 'chat';
     const previousModel = this.options.llmProvider?.getModel?.();
-    if (isCode && this.options.llmProvider?.setModel) {
-      this.options.llmProvider.setModel('qwen2.5-coder:1.5b');
+    if (this.options.llmProvider) {
+      const provisioner = new ModelProvisioner(this.options.llmProvider);
+      const decision = await provisioner.ensureAndDispatch({
+        prompt: text,
+        onProgress: async (msg) => {
+          await this.sendMessage(chatId, msg);
+          await this.sendAction(chatId, 'typing');
+        },
+      });
+      activeTaskType = decision.category === 'code' ? 'code' : decision.category === 'reasoning' ? 'reasoning' : 'chat';
     }
 
     // Automated research augmentation for questions & factual lookups
     let researchFacts = '';
     let sourcesFooter = '';
+    const lower = text.toLowerCase();
     const isQuestion = lower.includes('?') || ['search', 'find', 'what', 'why', 'how', 'who', 'where', 'when', 'explain', 'tell me', 'lookup', 'research', 'latest', 'news', 'specs', 'architecture'].some((k) => lower.includes(k));
 
     if (isQuestion) {
@@ -574,7 +583,7 @@ export class TelegramBotClient {
     if (this.options.llmProvider) {
       try {
         const fullPrompt = CognitionEngine.formatPrompt(text, {
-          taskType: isCode ? 'code' : isQuestion ? 'research' : 'chat',
+          taskType: activeTaskType === 'code' ? 'code' : activeTaskType === 'reasoning' ? 'reasoning' : isQuestion ? 'research' : 'chat',
           memoryContext: contextPrompt,
           researchFacts,
           activeModel: this.options.llmProvider.getModel(),
@@ -584,7 +593,7 @@ export class TelegramBotClient {
       } catch (err: any) {
         responseText = `Inference failed: ${err.message}`;
       } finally {
-        if (isCode && previousModel && this.options.llmProvider?.setModel) {
+        if (previousModel && this.options.llmProvider?.setModel) {
           this.options.llmProvider.setModel(previousModel);
         }
       }

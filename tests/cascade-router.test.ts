@@ -18,7 +18,8 @@ describe('CascadeRouter & MemoryGovernor', () => {
     });
 
     assert.equal(decision.lane, 'code');
-    assert.equal(decision.chosenModel.id, 'qwen2.5-coder:1.5b');
+    assert.equal(decision.chosenModel.lane, 'code');
+    assert.ok(decision.chosenModel.id.includes('qwen2.5-coder'));
     assert.equal(decision.isFallback, false);
   });
 

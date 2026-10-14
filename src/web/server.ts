@@ -14,6 +14,7 @@ import { ContentDistiller } from '../services/scraper.js';
 import { ConsensusEngine } from '../services/consensus.js';
 import { CognitionEngine } from '../agents/cognition.js';
 import { ModelBenchmarkSuite } from '../eval/benchmark.js';
+import { ModelProvisioner } from '../orchestration/provisioner.js';
 import { logger } from '../utils/logger.js';
 import { config } from '../config.js';
 
@@ -221,9 +222,25 @@ export class JarvisWebServer {
       }
     }
 
-    // Dynamic model routing: if code requested and model not explicitly overridden
-    const isCode = ['code', 'script', 'function', 'class', 'write', 'implement', 'typescript', 'python', 'powershell', 'fix', 'bug', 'refactor', 'rewrite'].some((k) => lower.includes(k));
-    const activeModel = model || (isCode ? 'qwen2.5-coder:1.5b' : 'qwen2.5:7b');
+    // Dynamic JIT model routing & on-demand provisioning
+    let activeModel = model;
+    let taskCategory: 'code' | 'reasoning' | 'chat' | 'vision' = 'chat';
+
+    if (!activeModel) {
+      const defaultProvider = new OllamaProvider({ baseUrl: config.ollamaBaseUrl });
+      const provisioner = new ModelProvisioner(defaultProvider);
+      const decision = await provisioner.ensureAndDispatch({
+        prompt,
+        onProgress: (msg) => {
+          res.write(`data: ${JSON.stringify({ chunk: `${msg}\n\n` })}\n\n`);
+        },
+      });
+      activeModel = decision.targetModel;
+      taskCategory = decision.category;
+    } else {
+      const isCode = ['code', 'script', 'function', 'class', 'write', 'implement', 'typescript', 'python', 'powershell', 'fix', 'bug', 'refactor', 'rewrite'].some((k) => lower.includes(k));
+      taskCategory = isCode ? 'code' : 'chat';
+    }
 
     // Step B: Inference with Ollama (or MockLLM fallback)
     const provider = new OllamaProvider({
@@ -232,7 +249,7 @@ export class JarvisWebServer {
     });
 
     const fullPrompt = CognitionEngine.formatPrompt(prompt, {
-      taskType: isCode ? 'code' : shouldResearch ? 'research' : 'chat',
+      taskType: taskCategory === 'code' ? 'code' : taskCategory === 'reasoning' ? 'reasoning' : shouldResearch ? 'research' : 'chat',
       researchFacts: researchContext,
       activeModel,
     });

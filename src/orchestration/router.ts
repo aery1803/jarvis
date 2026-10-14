@@ -44,9 +44,13 @@ export class CascadeRouter {
       };
     }
 
-    // Cascade Fallback: Try lighter model in Fast or Code lane if Balanced is too heavy
-    const fallbackModel = this.registry.getPrimaryModelForLane('code') ?? this.registry.getPrimaryModelForLane('fast');
-    if (fallbackModel && fallbackModel.id !== candidate.id) {
+    // Cascade Fallback: Check lighter models in ascending order of memory requirement
+    const lighterModels = this.registry
+      .listModels()
+      .filter((m) => m.id !== candidate.id)
+      .sort((a, b) => a.memoryRequirementBytes - b.memoryRequirementBytes);
+
+    for (const fallbackModel of lighterModels) {
       const fallbackCheck = await this.governor.acquireLease(fallbackModel);
       if (fallbackCheck.acquired) {
         this.governor.releaseLease(fallbackModel.id);
