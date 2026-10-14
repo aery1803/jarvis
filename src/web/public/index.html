@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Jarvis Local AI</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="app-layout">
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <div class="logo">
+          <span class="logo-icon">⚡</span>
+          <span class="logo-text">Jarvis Local</span>
+        </div>
+        <button class="new-chat-btn" id="newChatBtn">+ New Chat</button>
+      </div>
+
+      <div class="sidebar-section">
+        <label for="modelSelect" class="section-label">Model Lane</label>
+        <select id="modelSelect" class="model-select">
+          <option value="qwen2.5:7b">qwen2.5:7b (Reasoning Lane)</option>
+          <option value="qwen2.5-coder:1.5b">qwen2.5-coder:1.5b (Fast Lane)</option>
+        </select>
+      </div>
+
+      <div class="sidebar-section toggle-section">
+        <label class="toggle-container">
+          <input type="checkbox" id="researchToggle" checked>
+          <span class="toggle-slider"></span>
+          <span class="toggle-label">Web Research (SearXNG)</span>
+        </label>
+      </div>
+
+      <div class="session-history-title">Recent Chats</div>
+      <div class="session-list" id="sessionList">
+        <!-- Dynamically populated -->
+      </div>
+
+      <div class="sidebar-footer">
+        <div class="status-indicator">
+          <span class="status-dot"></span>
+          <span class="status-text" id="statusText">Host RAM Headroom: OK</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Chat Workspace -->
+    <main class="chat-workspace">
+      <header class="chat-header">
+        <div class="header-info">
+          <h2 id="currentChatTitle">New Conversation</h2>
+          <span class="current-model-tag" id="currentModelTag">qwen2.5:7b</span>
+        </div>
+      </header>
+
+      <div class="messages-container" id="messagesContainer">
+        <div class="welcome-card" id="welcomeCard">
+          <div class="welcome-icon">🤖</div>
+          <h1>Welcome to Jarvis</h1>
+          <p>Your fully local, private AI assistant running on ASUS ROG Flow Z13.</p>
+          <div class="example-prompts">
+            <button class="prompt-chip" data-prompt="Explain AMD Radeon 8060S UMA memory architecture.">
+              Explain AMD Radeon 8060S UMA memory architecture
+            </button>
+            <button class="prompt-chip" data-prompt="Research the latest benchmarks on local LLM inference engines.">
+              Research the latest local LLM benchmarks
+            </button>
+            <button class="prompt-chip" data-prompt="How does Jarvis enforce the Action Gateway 3-tier security model?">
+              Explain Action Gateway security tiers
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="input-area-container">
+        <form class="input-form" id="chatForm">
+          <textarea
+            id="promptInput"
+            class="prompt-textarea"
+            placeholder="Ask Jarvis anything (Shift+Enter for newline)..."
+            rows="1"
+            required
+          ></textarea>
+          <button type="submit" class="send-btn" id="sendBtn">
+            <span>Send</span>
+          </button>
+        </form>
+        <div class="input-footer">
+          <span>Private & Local • Running on Radeon 8060S Vulkan Engine • Zero Cloud Telemetry</span>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
