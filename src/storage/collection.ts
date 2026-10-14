@@ -217,6 +217,10 @@ export class DocumentStore {
     return new Collection<T>(this.db, name);
   }
 
+  public getCollection<T extends { id?: string | number }>(name: string): Collection<T> {
+    return this.collection<T>(name);
+  }
+
   public close(): void {
     this.db.close();
   }
