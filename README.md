@@ -21,7 +21,7 @@ Imagine you have a super-smart robot friend who lives **inside your laptop**.
 You don't need to open ten different windows. You can start all of Jarvis with **one single command**:
 
 ```powershell
-npm start
+pnpm start
 ```
 *(Or in PowerShell: `.\scripts\start-all.ps1`)*
 
@@ -29,9 +29,11 @@ npm start
 Want Jarvis to automatically re-run whenever you change or improve any code? Run:
 
 ```powershell
-npm run dev
+pnpm dev
 # Or if you have nodemon installed globally:
 nodemon
+# Or in PowerShell with watch flag:
+.\scripts\start-all.ps1 -Watch
 ```
 *Whenever you edit any file in `src/` (TypeScript, HTML, CSS, JSON), Nodemon instantly restarts Jarvis cleanly with zero downtime!*
 
@@ -48,7 +50,7 @@ To stop everything, simply press **Ctrl + C** in your terminal.
 ## 🎮 How to Use Jarvis
 
 ### 1. The Local Web Chat (Like Claude or ChatGPT, but on your machine!)
-1. Run `npm start` (or `npm run web`).
+1. Run `pnpm start` (or `pnpm dev` for auto-reloading).
 2. Open [`http://localhost:3000`](http://localhost:3000) in Chrome, Edge, or Brave.
 3. Pick your model:
    - 💻 **`qwen2.5-coder:7b` (Code Lane):** Heavyweight coding brain for complete scripts, bug fixes, and testing.
@@ -103,18 +105,18 @@ If you ever want to run just one specific piece of Jarvis:
 
 | Command | What It Runs |
 |---|---|
-| `npm start` | **All-in-One:** Starts Web Chat, Telegram Bot, and Dev Agent together! |
-| `npm run dev` | **Auto-Reload:** Runs all services with `nodemon`, auto-restarting on code changes! |
-| `nodemon` | Same as `npm run dev` (when using nodemon globally) |
-| `npm run web` | Starts only the Web Chat UI on `http://localhost:3000` |
-| `npm run telegram` | Starts only the Telegram Bot daemon |
-| `npm run research` | Runs the deep research terminal tool |
-| `npm run devagent:watch` | Starts the autonomous pair-programming watcher on GitHub |
-| `npm test` | Runs all 113 automated tests across 32 suites (takes ~5 seconds) |
-| `npm run build` | Compiles all TypeScript code into production JavaScript |
-| `npm run benchmark:eval` | Runs intelligence benchmark on installed models (Score, Grade, t/s) |
-| `npm run searxng` | Starts your local private search engine in Docker |
-| `npm run preflight` | Checks that your GPU, VRAM, and RAM have enough breathing room |
+| `pnpm start` | **All-in-One:** Starts Web Chat, Telegram Bot, and Dev Agent together! |
+| `pnpm dev` | **Auto-Reload:** Runs all services with `nodemon`, auto-restarting on code changes! |
+| `nodemon` | Same as `pnpm dev` (when using nodemon globally) |
+| `pnpm run web` | Starts only the Web Chat UI on `http://localhost:3000` |
+| `pnpm run telegram` | Starts only the Telegram Bot daemon |
+| `pnpm run research` | Runs the deep research terminal tool |
+| `pnpm run devagent:watch` | Starts the autonomous pair-programming watcher on GitHub |
+| `pnpm test` | Runs all 113 automated tests across 32 suites (takes ~5 seconds) |
+| `pnpm run build` | Compiles all TypeScript code into production JavaScript |
+| `pnpm run benchmark:eval` | Runs intelligence benchmark on installed models (Score, Grade, t/s) |
+| `pnpm run searxng` | Starts your local private search engine in Docker |
+| `pnpm run preflight` | Checks that your GPU, VRAM, and RAM have enough breathing room |
 
 ---
 
