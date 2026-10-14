@@ -1,7 +1,7 @@
 # Jarvis Local AI Agent: Master Design and Context Document
 
-**Version:** v3.1 (Hardware Audited, Vulkan 54GB VRAM Confirmed, Gate 0 In Progress, Merged Master Specification)
-**Status:** **IN PROGRESS - GATE 0 EXECUTION.** Requirements approved (D61). Hardware profile actively audited and confirmed on ASUS ROG Flow Z13 (`GZ302EA`). Native Windows Vulkan GPU acceleration verified with 54+ GB free VRAM (`llama.cpp` b11272). Personal private repository linked (`aery1803/jarvis`) with `main` and `master` synchronized. Gate 0 checklist (`jarvis-gate0-checklist.md`) is now fully merged into Section 22.2 as the single standalone master file.
+**Version:** v3.2 (Gate 0 100% Complete, Phase 0 Benchmarks Merged, Phase 0b Dev Agent Implemented)
+**Status:** **IN PROGRESS - PHASE 0B DEV AGENT IMPLEMENTATION.** Gate 0 verified and passed (D61). Phase 0 (FEAT-001) merged into `main` via PR #2; Issue #1 marked `Done`. Phase 0b (FEAT-002: Minimal Dev Agent & GitHub Board Watcher) implemented with native SQLite Own-Action Registry, 3-tier Action Gateway, Concept Writer, and live Board #2 poller passing 18/18 unit tests (100%).
 **Purpose:** The single source of truth for the Jarvis project. Holds the complete architecture, verified hardware baseline, decisions, and live Gate 0 checklist.
 
 **Labels used throughout**
@@ -1182,11 +1182,11 @@ Decision: **Claude writes everything the blueprint needs; the owner's local AI b
 
 *In plain words: The order in which things get built.*
 
-| Phase | Goal | Contents |
-|---|---|---|
-| 0 | Workstation and coding setup | Raise the GPU memory share; install inference backends; run the benchmark (Section 7.5); choose models; set up VS Code with local agent and autocomplete (Section 17); Docker; start the evaluation set |
-| 0b | Development workflow bootstrap | Git repository, protected branches, board and templates, the limited GitHub token, CI checks, and a minimal Dev Agent (board watcher, concept writer, pull request handler), built first with manual help in the editor; afterwards the AI works only through the board (Section 17.6 to 17.12) |
-| 1 | Core and research skill | Config, logger, provider interface, SearXNG, scraper, consensus engine, synthesis, CLI; the original deliverables, corrected |
+| Phase | Goal | Contents | Status |
+|---|---|---|---|
+| 0 | Workstation and coding setup | Raise the GPU memory share; install inference backends; run the benchmark (Section 7.5); choose models; set up VS Code with local agent and autocomplete (Section 17); Docker; start the evaluation set | **DONE** (FEAT-001, PR #2 merged) |
+| 0b | Development workflow bootstrap | Git repository, protected branches, board and templates, the limited GitHub token, CI checks, and a minimal Dev Agent (board watcher, concept writer, pull request handler), built first with manual help in the editor; afterwards the AI works only through the board (Section 17.6 to 17.12) | **IMPLEMENTED** (FEAT-002, 18/18 tests pass) |
+| 1 | Core and research skill | Config, logger, provider interface, SearXNG, scraper, consensus engine, synthesis, CLI; the original deliverables, corrected | Planned (Next) |
 | 2 | Memory, sessions, Telegram, safety | Memory manager and tiers, session and task manager, Telegram bot, Action Gateway, permission engine, audit log, kill switch |
 | 3 | Orchestration and quality | Model registry, capability checker, memory governor, cascade, cost ledger, evaluation harness; image understanding and OCR (Section 5.10) |
 | 4 | Email and browser | Gmail watcher with Telegram summaries and approvals; Playwright automation with logged-in profile |
