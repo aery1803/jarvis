@@ -40,10 +40,23 @@ describe('SearXNGClient', () => {
     const client = new SearXNGClient({
       baseUrl: 'http://127.0.0.1:9999', // unreachable port
       enableFallback: true,
+      enableLiveFallback: false,
     });
 
     const results = await client.search('local AI agent architecture');
     assert.ok(results.length > 0);
     assert.match(results[0].title, /local AI agent/i);
+  });
+
+  test('should corroborate live web search results when live fallback is enabled', async () => {
+    const client = new SearXNGClient({
+      baseUrl: 'http://127.0.0.1:9999',
+      enableFallback: true,
+      enableLiveFallback: true,
+    });
+
+    const results = await client.search('gold price today in Punjab');
+    assert.ok(results.length > 0);
+    assert.ok(results[0].snippet.length > 0);
   });
 });
