@@ -23,20 +23,35 @@ export class ModelRegistry {
   }
 
   private registerDefaults(): void {
-    // 1. Code Lane - Primary: Qwen 2.5 Coder 7B
+    // 1. Primary Starting / Resident Lane: Qwen 3 8B (Authority: User Directives & Concept Doc)
     this.register({
-      id: 'qwen2.5-coder:7b',
-      name: 'Qwen 2.5 Coder 7B',
-      lane: 'code',
+      id: 'qwen3:8b',
+      name: 'Qwen 3 8B Instruct',
+      lane: 'resident',
       family: 'qwen',
-      parameterSize: '7B',
+      parameterSize: '8B',
       quantization: 'q4_k_m',
-      memoryRequirementBytes: 4.8 * 1024 * 1024 * 1024,
+      memoryRequirementBytes: 5.2 * 1024 * 1024 * 1024,
       contextLength: 32768,
-      measuredTokensPerSec: 38.0,
-      strengths: ['complex software development', 'refactoring', 'full scripts', 'unit tests'],
+      measuredTokensPerSec: 42.0,
+      strengths: ['resident baseline', 'orchestration', 'tool calling', 'code generation', 'fast conversational response'],
       isPrimary: true,
-      notes: 'Primary heavy coding model',
+      notes: 'Starting baseline model with full system, tool, and memory access',
+    });
+
+    // 1b. Fast Conversational Lane (also maps to qwen3:8b for maximum speed and capability)
+    this.register({
+      id: 'qwen3:8b',
+      name: 'Qwen 3 8B Instruct',
+      lane: 'fast',
+      family: 'qwen',
+      parameterSize: '8B',
+      quantization: 'q4_k_m',
+      memoryRequirementBytes: 5.2 * 1024 * 1024 * 1024,
+      contextLength: 32768,
+      measuredTokensPerSec: 42.0,
+      strengths: ['general chat', 'summaries', 'email triage', 'fast responses'],
+      isPrimary: true,
     });
 
     // 2. Balanced / Reasoning Lane - Verified on Radeon 8060S (41.2 t/s)
@@ -55,67 +70,116 @@ export class ModelRegistry {
       notes: 'Primary reasoning and orchestration model',
     });
 
-    // 2b. Deep Chain-of-Thought Reasoning Lane - DeepSeek R1 7B
+    // 2b. High-Intelligence Deep Lane: Qwen 3 14B
     this.register({
-      id: 'deepseek-r1:7b',
-      name: 'DeepSeek R1 7B',
-      lane: 'deep',
-      family: 'deepseek',
-      parameterSize: '7B',
-      quantization: 'q4_k_m',
-      memoryRequirementBytes: 4.9 * 1024 * 1024 * 1024,
-      contextLength: 32768,
-      measuredTokensPerSec: 36.0,
-      strengths: ['chain-of-thought thinking', 'mathematics', 'deductive logic', 'deep planning'],
-      isPrimary: true,
-      notes: 'Specialized reasoning engine with explicit <think> tokens',
-    });
-
-    // 2c. Precision 30B-Class Heavy Engineering Lane - Qwen 2.5 Coder 32B (Authority: PHASE_0_SPEC.md)
-    this.register({
-      id: 'qwen2.5-coder:32b',
-      name: 'Qwen 2.5 Coder 32B Instruct',
-      lane: 'deep',
-      family: 'qwen',
-      parameterSize: '32B',
-      quantization: 'q4_k_m',
-      memoryRequirementBytes: 19.0 * 1024 * 1024 * 1024, // ~19 GB, fits in 46.5 GB Vulkan pool
-      contextLength: 32768,
-      measuredTokensPerSec: 18.4,
-      strengths: ['precision engineering', 'full architecture design', 'multi-file refactoring', 'mathematical proofs', 'complex TDD'],
-      isPrimary: false,
-      notes: 'Precision 30B-class heavy model from initial concept doc',
-    });
-
-    // 2d. High-Intelligence 14B Reasoning Lane - Qwen 2.5 14B
-    this.register({
-      id: 'qwen2.5:14b',
-      name: 'Qwen 2.5 14B Instruct',
+      id: 'qwen3:14b',
+      name: 'Qwen 3 14B Instruct',
       lane: 'deep',
       family: 'qwen',
       parameterSize: '14B',
       quantization: 'q4_k_m',
-      memoryRequirementBytes: 9.0 * 1024 * 1024 * 1024,
+      memoryRequirementBytes: 9.3 * 1024 * 1024 * 1024,
       contextLength: 32768,
-      measuredTokensPerSec: 26.5,
-      strengths: ['advanced reasoning', 'multi-model ensemble', 'synthesized analysis'],
+      measuredTokensPerSec: 28.5,
+      strengths: ['multi-step reasoning', 'high-accuracy logic', 'analytical synthesis'],
       isPrimary: false,
-      notes: 'High-intelligence 14B reasoning model',
+      notes: 'Mid-tier powerhouse balancing high intelligence with low latency',
     });
 
-    // 3. Fast General Assistant Lane
+    // 3. High-Accuracy Deep Reasoning Lane: Qwen 3.8 27B
     this.register({
-      id: 'qwen2.5:3b',
-      name: 'Qwen 2.5 3B',
-      lane: 'fast',
+      id: 'qwen3.8:27b',
+      name: 'Qwen 3.8 27B Instruct',
+      lane: 'deep',
       family: 'qwen',
-      parameterSize: '3B',
+      parameterSize: '27B',
       quantization: 'q4_k_m',
-      memoryRequirementBytes: 2.2 * 1024 * 1024 * 1024,
+      memoryRequirementBytes: 16.5 * 1024 * 1024 * 1024,
       contextLength: 32768,
-      measuredTokensPerSec: 85.0,
-      strengths: ['general chat', 'summaries', 'email triage'],
+      measuredTokensPerSec: 22.0,
+      strengths: ['deep analytical deduction', 'code refactoring', 'mathematical proofs', 'deep context comprehension'],
+      isPrimary: false,
+      notes: 'High-accuracy 27B reasoning model',
+    });
+
+    // 4. Dense 32B Powerhouse Lane: Qwen 3 32B
+    this.register({
+      id: 'qwen3:32b',
+      name: 'Qwen 3 32B Instruct',
+      lane: 'deep',
+      family: 'qwen',
+      parameterSize: '32B',
+      quantization: 'q4_k_m',
+      memoryRequirementBytes: 20.0 * 1024 * 1024 * 1024, // ~20 GB, fits comfortably in 46.5 GB Vulkan pool
+      contextLength: 32768,
+      measuredTokensPerSec: 18.0,
+      strengths: ['precision engineering', 'full architecture design', 'multi-file refactoring', 'complex logic'],
+      isPrimary: false,
+      notes: 'Precision 30B/32B-class heavy model from initial concept doc',
+    });
+
+    // 5. Reasoning Powerhouse: NVIDIA Llama-3.3-Nemotron-Super-49B-v1.5
+    this.register({
+      id: 'rnogy/Nvidia_Llama-3_3-Nemotron-Super-49B-v1_5:q4_K_M',
+      name: 'Llama 3.3 Nemotron Super 49B v1.5',
+      lane: 'deep',
+      family: 'nemotron',
+      parameterSize: '49B',
+      quantization: 'q4_k_m',
+      memoryRequirementBytes: 30.2 * 1024 * 1024 * 1024, // ~30.2 GB, fits comfortably in 46.5 GB Vulkan pool
+      contextLength: 131072, // 128k context
+      measuredTokensPerSec: 14.5,
+      strengths: ['superior reasoning', 'neural architecture search efficiency', 'complex agentic workflows', 'deep math and deduction'],
+      isPrimary: false,
+      notes: 'NVIDIA 49B pruned reasoning powerhouse with 128k context',
+    });
+
+    // 6. Flagship Chain-of-Thought Reasoning: DeepSeek R1 70B
+    this.register({
+      id: 'deepseek-r1:70b',
+      name: 'DeepSeek R1 70B',
+      lane: 'deep',
+      family: 'deepseek',
+      parameterSize: '70B',
+      quantization: 'q4_k_m',
+      memoryRequirementBytes: 43.0 * 1024 * 1024 * 1024, // ~43 GB, fits in 46.5 GB Vulkan pool
+      contextLength: 32768,
+      measuredTokensPerSec: 10.0,
+      strengths: ['flagship chain-of-thought reasoning', 'mathematics', 'deductive logic', 'deep planning'],
+      isPrimary: false,
+      notes: 'Flagship 70B reasoning model with explicit <think> tokens',
+    });
+
+    // 7. Flagship World Knowledge & Heavy Synthesis: Qwen 72B
+    this.register({
+      id: 'qwen2.5:72b',
+      name: 'Qwen 72B Instruct',
+      lane: 'deep',
+      family: 'qwen',
+      parameterSize: '72B',
+      quantization: 'q4_k_m',
+      memoryRequirementBytes: 43.0 * 1024 * 1024 * 1024,
+      contextLength: 32768,
+      measuredTokensPerSec: 9.8,
+      strengths: ['flagship synthesis', 'massive world knowledge', 'complex multi-domain intelligence'],
+      isPrimary: false,
+      notes: 'Flagship 72B dense intelligence model',
+    });
+
+    // 8. Code Lane - Primary: Qwen 3 8B / Qwen 2.5 Coder
+    this.register({
+      id: 'qwen2.5-coder:7b',
+      name: 'Qwen 2.5 Coder 7B',
+      lane: 'code',
+      family: 'qwen',
+      parameterSize: '7B',
+      quantization: 'q4_k_m',
+      memoryRequirementBytes: 4.8 * 1024 * 1024 * 1024,
+      contextLength: 32768,
+      measuredTokensPerSec: 38.0,
+      strengths: ['software development', 'refactoring', 'full scripts', 'unit tests'],
       isPrimary: true,
+      notes: 'Dedicated coding model',
     });
 
     // 4. Resident Embedding / Routing Lane

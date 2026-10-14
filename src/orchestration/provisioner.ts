@@ -32,45 +32,57 @@ export class ModelProvisioner {
 
   /**
    * Determine the best specialized model for the given task prompt.
-   * Default baseline: Always run 7B models. Escalate to 30B/32B only for precise/heavy work.
+   * Default baseline: Always run Qwen 3 8B model which has full access to memory, tools, and system state.
+   * Escalate to 32B/49B/70B only for precise/heavy analytical and architecture work.
    */
   classifyTask(prompt: string, explicitType?: string): { model: string; category: 'precision' | 'code' | 'reasoning' | 'chat' | 'vision'; is30BClass: boolean; rationale: string } {
     const lower = prompt.toLowerCase();
 
-    // 0. Precision & Heavy Engineering Work -> 30B-Class Model (PHASE_0_SPEC.md Section 1.1)
-    const precisionRegex = /\b(precise|precision|30b|32b|full architecture|system blueprint|heavy refactor|multi-file|rigorous proof|deep math|production grade)\b/i;
-    if (explicitType === 'precision' || explicitType === '30b' || precisionRegex.test(lower)) {
+    // 0. Flagship Deep Reasoning & Math -> DeepSeek R1 70B or Nemotron 49B
+    const deepReasoningRegex = /\b(deepseek|r1|70b|nemotron|49b|deep math|rigorous proof|symbolic logic|formal proof|complex deduction)\b/i;
+    if (explicitType === 'deepseek' || explicitType === '70b' || explicitType === 'nemotron' || deepReasoningRegex.test(lower)) {
       return {
-        model: 'qwen2.5-coder:32b',
-        category: 'precision',
+        model: 'deepseek-r1:70b',
+        category: 'reasoning',
         is30BClass: true,
-        rationale: 'Heavy 30B-class precision model from initial concept doc for complex architecture and precision engineering.',
+        rationale: 'Flagship 70B deep reasoning model with chain-of-thought verification.',
       };
     }
 
-    // 1. Standard Code / Script Tasks -> Resident 7B Coder
+    // 1. Precision & Heavy Engineering Work -> 30B/32B-Class Model (Qwen 3 32B)
+    const precisionRegex = /\b(precise|precision|30b|32b|full architecture|system blueprint|heavy refactor|multi-file|production grade)\b/i;
+    if (explicitType === 'precision' || explicitType === '30b' || explicitType === '32b' || precisionRegex.test(lower)) {
+      return {
+        model: 'qwen3:32b',
+        category: 'precision',
+        is30BClass: true,
+        rationale: 'Heavy 32B-class precision model for complex architecture and multi-file engineering.',
+      };
+    }
+
+    // 2. Mid-Tier Analytical Reasoning -> Qwen 3 14B or Qwen 3.8 27B
+    const midReasoningRegex = /\b(analyze|compare|evaluate|deduce|strategy|synthesis|deep analysis)\b/i;
+    if (explicitType === 'reasoning' || midReasoningRegex.test(lower)) {
+      return {
+        model: 'qwen3:14b',
+        category: 'reasoning',
+        is30BClass: false,
+        rationale: 'High-intelligence 14B reasoning model for analytical synthesis.',
+      };
+    }
+
+    // 3. Standard Code / Script Tasks -> Resident Qwen 3 8B
     const codeRegex = /\b(code|coding|script|scripts|function|def|python|typescript|javascript|powershell|bash|sql|bug|debug|fix|refactor|rewrite|tests?|implement|database|endpoints?|git)\b/i;
     if (explicitType === 'code' || codeRegex.test(lower)) {
       return {
-        model: 'qwen2.5-coder:7b',
+        model: 'qwen3:8b',
         category: 'code',
         is30BClass: false,
-        rationale: 'Resident 7B coding engine with full tool and filesystem access.',
+        rationale: 'Resident Qwen 3 8B coding engine with full tool and filesystem access.',
       };
     }
 
-    // 2. Reasoning & Logic Tasks -> 7B Reasoning
-    const reasoningRegex = /\b(why|math|calculate|deduce|deduction|logic|puzzle|prove|proof|architecture|compare|analyze|synthesize|strategy|reasoning)\b/i;
-    if (explicitType === 'reasoning' || reasoningRegex.test(lower)) {
-      return {
-        model: 'deepseek-r1:7b',
-        category: 'reasoning',
-        is30BClass: false,
-        rationale: '7B reasoning engine with chain-of-thought logic synthesis.',
-      };
-    }
-
-    // 3. Vision / Image
+    // 4. Vision / Image
     const visionKeywords = ['image', 'photo', 'picture', 'screenshot', 'diagram', 'ocr'];
     if (explicitType === 'vision' || visionKeywords.some((k) => lower.includes(k))) {
       return {
@@ -81,12 +93,12 @@ export class ModelProvisioner {
       };
     }
 
-    // 4. Default Always-Running Resident 7B Model (Access to everything)
+    // 5. Default Always-Running Resident Model: Qwen 3 8B (Starting Model with Access to Everything)
     return {
-      model: 'qwen2.5:7b',
+      model: 'qwen3:8b',
       category: 'chat',
       is30BClass: false,
-      rationale: 'Resident 7B general orchestrator model with full access to memory, tools, and system state.',
+      rationale: 'Resident Qwen 3 8B starting orchestrator model with full access to memory, tools, and system state.',
     };
   }
 

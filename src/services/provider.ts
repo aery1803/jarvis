@@ -37,7 +37,7 @@ export class OllamaProvider implements LLMProvider {
 
   constructor(options: OllamaProviderOptions = {}) {
     this.baseUrl = options.baseUrl ?? 'http://127.0.0.1:11434';
-    this.model = options.model ?? 'qwen2.5:7b';
+    this.model = options.model ?? 'qwen3:8b';
   }
 
   public getModel(): string {
