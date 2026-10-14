@@ -26,6 +26,8 @@ export interface ChatMessage {
     sources?: string[];
     confidence?: number;
     toolCalls?: any[];
+    /** True when the stream ended early (client disconnect or provider failure) and `content` is incomplete. */
+    partial?: boolean;
   };
 }
 

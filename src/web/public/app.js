@@ -3,7 +3,11 @@
  * Authority: FEAT-004
  */
 
+import { formatMarkdown, formatStreamingMarkdown, escapeHtml } from './markdown.js';
+import { createSseParser } from './sse.js';
+
 let currentSessionId = null;
+let activeStream = null; // { controller: AbortController, reader: ReadableStreamDefaultReader | null }
 
 const sessionList = document.getElementById('sessionList');
 const newChatBtn = document.getElementById('newChatBtn');
@@ -16,6 +20,7 @@ const welcomeCard = document.getElementById('welcomeCard');
 const chatForm = document.getElementById('chatForm');
 const promptInput = document.getElementById('promptInput');
 const sendBtn = document.getElementById('sendBtn');
+const stopBtn = document.getElementById('stopBtn');
 const statusText = document.getElementById('statusText');
 
 // Check system health on boot
@@ -156,19 +161,11 @@ function appendMessageBubble(role, content, meta = null) {
   bubble.className = 'message-bubble';
   bubble.innerHTML = formatMarkdown(content);
 
-  // Render cited sources if present
-  if (meta && meta.sources && meta.sources.length > 0) {
-    const sourcesDiv = document.createElement('div');
-    sourcesDiv.className = 'source-pill-container';
-    meta.sources.forEach((src, idx) => {
-      const a = document.createElement('a');
-      a.className = 'source-pill';
-      a.href = src;
-      a.target = '_blank';
-      a.textContent = `🔗 Source ${idx + 1}`;
-      sourcesDiv.appendChild(a);
-    });
-    bubble.appendChild(sourcesDiv);
+  if (meta && meta.partial) {
+    bubble.insertAdjacentHTML('beforeend', '<div class="stream-stopped">Response stopped early</div>');
+  }
+  if (meta && meta.sources) {
+    appendSourcePills(bubble, meta.sources);
   }
 
   if (role === 'user') {
@@ -184,49 +181,62 @@ function appendMessageBubble(role, content, meta = null) {
   return bubble;
 }
 
-// Simple markdown formatter for bold, italics, code blocks, lists
-function formatMarkdown(text) {
-  if (!text) return '';
-  let escaped = escapeHtml(text);
-
-  // Code blocks: ```lang ... ```
-  escaped = escaped.replace(/```([a-zA-Z0-9]*)\n([\s\S]*?)```/g, (match, lang, code) => {
-    return `<pre><code>${code.trim()}</code></pre>`;
+function appendSourcePills(bubble, sources) {
+  if (!Array.isArray(sources) || sources.length === 0) return;
+  const sourcesDiv = document.createElement('div');
+  sourcesDiv.className = 'source-pill-container';
+  sources.forEach((src, idx) => {
+    const a = document.createElement('a');
+    a.className = 'source-pill';
+    a.href = src;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.textContent = `🔗 Source ${idx + 1}`;
+    sourcesDiv.appendChild(a);
   });
-
-  // Inline code: `...`
-  escaped = escaped.replace(/`([^`]+)`/g, '<code>$1</code>');
-
-  // Bold: **...**
-  escaped = escaped.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-
-  // Italic: *...*
-  escaped = escaped.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-
-  // Line breaks
-  escaped = escaped.replace(/\n/g, '<br>');
-
-  return escaped;
-}
-
-function escapeHtml(str) {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+  bubble.appendChild(sourcesDiv);
 }
 
 function scrollToBottom() {
   messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }
 
+function setStreamingUi(isStreaming) {
+  sendBtn.disabled = isStreaming;
+  if (stopBtn) stopBtn.hidden = !isStreaming;
+}
+
+function stopActiveStream() {
+  if (!activeStream) return;
+  activeStream.controller.abort();
+  if (activeStream.reader) activeStream.reader.cancel().catch(() => {});
+}
+
+if (stopBtn) {
+  stopBtn.addEventListener('click', stopActiveStream);
+}
+
+// Copy buttons are rendered inside bubble HTML, so one delegated listener covers every code block.
+messagesContainer.addEventListener('click', async (e) => {
+  const btn = e.target.closest('.copy-code-btn');
+  if (!btn) return;
+  const code = btn.closest('.code-block')?.querySelector('code');
+  if (!code) return;
+  try {
+    await navigator.clipboard.writeText(code.textContent ?? '');
+    btn.textContent = 'Copied';
+  } catch (err) {
+    console.error('[Jarvis] Copy to clipboard failed:', err);
+    btn.textContent = 'Copy failed';
+  }
+  setTimeout(() => (btn.textContent = 'Copy'), 1500);
+});
+
 // Handle Form Submission with Real-Time Streaming
 chatForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   const prompt = promptInput.value.trim();
-  if (!prompt) return;
+  if (!prompt || activeStream) return;
 
   if (!currentSessionId) {
     await createNewSession(prompt.slice(0, 30));
@@ -241,12 +251,18 @@ chatForm.addEventListener('submit', async (e) => {
 
   // Append empty AI bubble for streaming
   const aiBubble = appendMessageBubble('assistant', 'Thinking...');
-  sendBtn.disabled = true;
+  const controller = new AbortController();
+  activeStream = { controller, reader: null };
+  setStreamingUi(true);
+
+  let accumulated = '';
+  let sources = [];
 
   try {
     const res = await fetch('/api/chat/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
       body: JSON.stringify({
         sessionId: currentSessionId,
         prompt,
@@ -260,59 +276,55 @@ chatForm.addEventListener('submit', async (e) => {
     }
 
     aiBubble.innerHTML = '';
-    let accumulated = '';
-    let sources = [];
-
     const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let done = false;
+    activeStream.reader = reader;
+    const parser = createSseParser();
+    let receivedDone = false;
 
-    while (!done) {
-      const { value, done: streamDone } = await reader.read();
-      done = streamDone;
-      if (value) {
-        const text = decoder.decode(value);
-        const lines = text.split('\n');
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const dataStr = line.slice(6);
-            if (dataStr === '[DONE]') break;
-            try {
-              const data = JSON.parse(dataStr);
-              if (data.chunk) {
-                accumulated += data.chunk;
-                aiBubble.innerHTML = formatMarkdown(accumulated);
-                scrollToBottom();
-              }
-              if (data.sources) {
-                sources = data.sources;
-              }
-            } catch (err) {
-              // Ignore non-json chunks
-            }
-          }
-        }
+    const handlePayload = (payload) => {
+      if (receivedDone) return;
+      if (payload === '[DONE]') {
+        receivedDone = true;
+        return;
       }
+      let data;
+      try {
+        data = JSON.parse(payload);
+      } catch (err) {
+        console.error('[Jarvis] Dropped unparseable SSE frame:', payload, err);
+        return;
+      }
+      if (typeof data.chunk === 'string') accumulated += data.chunk;
+      if (Array.isArray(data.sources)) sources = data.sources;
+    };
+
+    while (!receivedDone) {
+      const { value, done } = await reader.read();
+      const payloads = done ? parser.end() : parser.push(value);
+      payloads.forEach(handlePayload);
+      aiBubble.innerHTML = formatStreamingMarkdown(accumulated);
+      scrollToBottom();
+      if (done) break;
+    }
+    if (receivedDone) {
+      await reader.cancel().catch(() => {});
     }
 
-    // Append source pills if present
-    if (sources.length > 0) {
-      const sourcesDiv = document.createElement('div');
-      sourcesDiv.className = 'source-pill-container';
-      sources.forEach((src, idx) => {
-        const a = document.createElement('a');
-        a.className = 'source-pill';
-        a.href = src;
-        a.target = '_blank';
-        a.textContent = `🔗 Source ${idx + 1}`;
-        sourcesDiv.appendChild(a);
-      });
-      aiBubble.appendChild(sourcesDiv);
+    aiBubble.innerHTML = formatMarkdown(accumulated);
+    if (controller.signal.aborted) {
+      aiBubble.insertAdjacentHTML('beforeend', '<div class="stream-stopped">Stopped</div>');
     }
+    appendSourcePills(aiBubble, sources);
   } catch (err) {
-    aiBubble.innerHTML = `<span style="color:#ff4d4f;">Error generating response: ${err.message}</span>`;
+    if (controller.signal.aborted) {
+      aiBubble.innerHTML = `${formatMarkdown(accumulated)}<div class="stream-stopped">Stopped</div>`;
+      appendSourcePills(aiBubble, sources);
+    } else {
+      aiBubble.innerHTML = `<span style="color:#ff4d4f;">Error generating response: ${escapeHtml(err.message)}</span>`;
+    }
   } finally {
-    sendBtn.disabled = false;
+    activeStream = null;
+    setStreamingUi(false);
     promptInput.focus();
     loadSessions(); // Update session timestamp & order
   }
@@ -383,10 +395,7 @@ if (benchmarkBtn) {
     if (benchmarkBtnText) benchmarkBtnText.textContent = 'Testing Model...';
 
     // Add user message indicating benchmark started
-    appendMessage({
-      role: 'user',
-      content: `Run comprehensive intelligence benchmark on model: ${selectedModel}`,
-    });
+    appendMessageBubble('user', `Run comprehensive intelligence benchmark on model: ${selectedModel}`);
 
     // Create assistant message container for results
     const assistantDiv = document.createElement('div');

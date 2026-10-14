@@ -234,4 +234,80 @@ describe('TelegramBotClient', () => {
     const reply = sentMessages.find((m) => m.method === 'sendMessage' && m.body.text.includes('Jarvis test answer'));
     assert.ok(reply);
   });
+
+  function ownerText(updateId: number, text: string): TelegramUpdate {
+    return {
+      update_id: updateId,
+      message: {
+        message_id: 200 + updateId,
+        from: { id: 123456789, is_bot: false, first_name: 'Owner' },
+        chat: { id: 123456789, type: 'private' },
+        date: 12400 + updateId,
+        text,
+      },
+    };
+  }
+
+  test('the second chat message\'s prompt includes the first message (T0 turns)', async () => {
+    const prompts: string[] = [];
+    llmProvider.generate = async (prompt: string) => {
+      prompts.push(prompt);
+      return 'Jarvis test answer';
+    };
+    await bot.handleUpdate(ownerText(20, 'My favourite colour is green'));
+    await bot.handleUpdate(ownerText(21, 'Recall my colour'));
+    const chatPrompts = prompts.filter((p) => p.includes('User Request:'));
+    assert.equal(chatPrompts.length, 2);
+    assert.ok(chatPrompts[1].includes('My favourite colour is green'), chatPrompts[1]);
+  });
+
+  test('a new session does not see the previous session\'s turns', async () => {
+    const prompts: string[] = [];
+    llmProvider.generate = async (prompt: string) => {
+      prompts.push(prompt);
+      return 'Jarvis test answer';
+    };
+    await bot.handleUpdate(ownerText(30, 'TG-ISOLATION-MARKER first session'));
+    await bot.handleUpdate(ownerText(31, '/new Second Workspace'));
+    await bot.handleUpdate(ownerText(32, 'Fresh start here'));
+    const last = prompts.filter((p) => p.includes('User Request:')).at(-1) ?? '';
+    assert.ok(last.includes('Fresh start here'));
+    assert.ok(!last.includes('TG-ISOLATION-MARKER'));
+  });
+
+  test('"remember that ..." stores a profile fact', async () => {
+    await bot.handleUpdate(ownerText(40, 'Remember that my editor is Neovim'));
+    const facts = await memory.getProfileFacts('123456789');
+    assert.ok(facts.some((f) => f.value === 'my editor is Neovim'));
+  });
+
+  test('a completed chat turn records an episode', async () => {
+    await bot.handleUpdate(ownerText(50, 'Draft my weekly plan'));
+    const episodes = await memory.queryEpisodes({ userId: '123456789' });
+    assert.equal(episodes.length, 1);
+    assert.equal(episodes[0].goal, 'Draft my weekly plan');
+  });
+
+  test('a Markdown parse failure is retried as plain text instead of being dropped', async () => {
+    const calls: Array<Record<string, unknown> | undefined> = [];
+    bot.apiCall = async <T>(method: string, body?: Record<string, unknown>): Promise<T> => {
+      calls.push(body);
+      if (method === 'sendMessage' && body?.parse_mode) {
+        throw new Error("Telegram API error [sendMessage]: Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 7");
+      }
+      return { message_id: 1, chat: { id: 1, type: 'private' }, date: 0, text: String(body?.text ?? '') } as T;
+    };
+    const sent = await bot.sendMessage(123456789, 'snake_case and *unclosed', { parse_mode: 'Markdown' });
+    assert.equal(sent.length, 1);
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1]?.parse_mode, undefined);
+    assert.equal(calls[1]?.text, 'snake_case and *unclosed');
+  });
+
+  test('non-parse send failures still throw', async () => {
+    bot.apiCall = async <T>(): Promise<T> => {
+      throw new Error('Telegram API error [sendMessage]: Forbidden: bot was blocked by the user');
+    };
+    await assert.rejects(bot.sendMessage(123456789, 'hi', { parse_mode: 'Markdown' }), /Forbidden/);
+  });
 });

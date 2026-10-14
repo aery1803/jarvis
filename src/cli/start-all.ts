@@ -48,14 +48,16 @@ async function startAll(): Promise<void> {
   });
 
   // 3. Start Local Web Workstation
+  // The web chat shares `memoryManager` with the Telegram bot and writes under the Telegram owner ID,
+  // so the owner profile and session summaries are one memory across both surfaces.
+  const ownerId = getTelegramOwnerId();
   const webPort = process.env.PORT ? Number.parseInt(process.env.PORT, 10) : 3000;
-  const webServer = new JarvisWebServer({ port: webPort });
+  const webServer = new JarvisWebServer({ port: webPort, memoryManager, userId: ownerId || 'owner' });
   await webServer.start();
   console.log(`[1/3] 🌐 Web Chat UI:     Online at http://localhost:${webPort}`);
 
   // 4. Start Telegram Bot Daemon
   const telegramToken = getTelegramToken('jarvis-telegram-dev');
-  const ownerId = getTelegramOwnerId();
   let bot: TelegramBotClient | null = null;
 
   if (telegramToken) {

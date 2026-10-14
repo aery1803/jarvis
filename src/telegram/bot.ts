@@ -16,7 +16,21 @@ import { CognitionEngine } from '../agents/cognition.js';
 import { ModelBenchmarkSuite } from '../eval/benchmark.js';
 import { ModelProvisioner } from '../orchestration/provisioner.js';
 import { MultiModelEnsemble } from '../orchestration/ensemble.js';
+import {
+  buildConversationContext,
+  contextBudgetFor,
+  parseRememberCommand,
+  recordTaskEpisode,
+  resolveSummarizer,
+  shouldSummarize,
+  summarizeAndStoreSession,
+  type ConversationTurn,
+} from '../memory/context-builder.js';
 import { config } from '../config.js';
+import { logger } from '../utils/logger.js';
+
+/** Turns kept in memory per Telegram session for T0 context. */
+const MAX_TRACKED_TURNS = 60;
 
 export interface TelegramBotOptions {
   token: string;
@@ -35,6 +49,9 @@ export class TelegramBotClient {
   private isPolling = false;
   private pollingOffset = 0;
   private activeSessions = new Map<string, string>(); // userId -> sessionId
+  // `SessionManager` stores sessions and tasks but not messages, so the current conversation's turns are
+  // tracked here per `userId:sessionId`; they do not survive a restart (summaries and profile facts do).
+  private conversations = new Map<string, { turns: ConversationTurn[]; messageCount: number }>();
   private searchClient: SearXNGClient;
   private distiller: ContentDistiller;
   private consensus: ConsensusEngine;
@@ -133,7 +150,7 @@ export class TelegramBotClient {
       const chunk = chunks[i];
       // Attach reply_markup only to the last chunk
       const markup = i === chunks.length - 1 ? options.reply_markup : undefined;
-      const msg = await this.apiCall<TelegramMessage>('sendMessage', {
+      const msg = await this.callWithPlainTextFallback<TelegramMessage>('sendMessage', {
         chat_id: chatId,
         text: chunk,
         parse_mode: options.parse_mode,
@@ -151,13 +168,32 @@ export class TelegramBotClient {
     text: string,
     options: SendMessageOptions = {}
   ): Promise<TelegramMessage> {
-    return this.apiCall<TelegramMessage>('editMessageText', {
+    return this.callWithPlainTextFallback<TelegramMessage>('editMessageText', {
       chat_id: chatId,
       message_id: messageId,
       text,
       parse_mode: options.parse_mode,
       reply_markup: options.reply_markup,
     });
+  }
+
+  /**
+   * Telegram rejects the whole message with a 400 "can't parse entities" when Markdown in model output is
+   * unbalanced (`_`, `*`, `[`, backticks). Resend once without `parse_mode`, so the text arrives as plain
+   * text instead of being dropped; any other error still propagates.
+   */
+  private async callWithPlainTextFallback<T>(method: string, body: Record<string, unknown>): Promise<T> {
+    try {
+      return await this.apiCall<T>(method, body);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (!body.parse_mode || !/can't parse entities|Bad Request/i.test(message)) {
+        throw err;
+      }
+      logger.warn(`[TelegramBot] ${method} rejected with parse_mode=${String(body.parse_mode)} (${message}); resending as plain text.`);
+      const { parse_mode: _rejectedParseMode, ...plainBody } = body;
+      return this.apiCall<T>(method, plainBody);
+    }
   }
 
   async answerCallbackQuery(callbackQueryId: string, text?: string): Promise<boolean> {
@@ -578,18 +614,33 @@ export class TelegramBotClient {
       taskTag = this.options.sessionManager.formatTaskTag(task);
     }
 
-    await this.withTypingIndicator(chatId, async () => {
-      // Assemble memory prompt context
-      let contextPrompt = '';
-      if (this.options.memoryManager && sessionId) {
-        const ctx = await this.options.memoryManager.buildPromptContext({
-          userId,
-          sessionId,
-          maxTokens: 1000,
-          includeTiers: ['T1', 'T2'],
-        });
-        contextPrompt = ctx.systemPromptAdditions;
+    const startedAt = Date.now();
+    const memorySessionId = sessionId ?? 'default';
+    const turnKey = `${userId}:${memorySessionId}`;
+    const conversation = this.conversations.get(turnKey) ?? { turns: [], messageCount: 0 };
+    const priorTurns = conversation.turns;
+
+    // Explicit memory writes happen before the context is built, so the fact is usable in this same reply.
+    const rememberedFact = parseRememberCommand(text);
+    if (rememberedFact && this.options.memoryManager) {
+      try {
+        await this.options.memoryManager.setProfileFact(userId, rememberedFact.key, rememberedFact.value, 'preference');
+      } catch (err: unknown) {
+        logger.warn(`[TelegramBot] Could not store profile fact: ${err instanceof Error ? err.message : String(err)}`);
       }
+    }
+
+    const turn = await this.withTypingIndicator(chatId, async () => {
+      // Assemble memory prompt context (T1 profile, T2 other sessions, T4 knowledge, T0 this conversation)
+      const ctx = await buildConversationContext({
+        memory: this.options.memoryManager,
+        userId,
+        sessionId: memorySessionId,
+        prompt: text,
+        turns: priorTurns,
+        maxTokens: contextBudgetFor([text]),
+      });
+      const contextPrompt = ctx.text;
 
       // Dynamic JIT model routing & on-demand provisioning
       let activeTaskType: 'chat' | 'code' | 'reasoning' = 'chat';
@@ -645,10 +696,12 @@ export class TelegramBotClient {
           responseText = MultiModelEnsemble.formatEnsembleResponse(ensembleResult, lower.includes('compare'));
         } catch (err: any) {
           // Fallback to single model if ensemble failed
+          logger.warn(`[TelegramBot] Ensemble failed, falling back to single model: ${err.message}`);
         }
       }
 
       // Standard single-model inference fallback
+      let completed = Boolean(responseText);
       if (!responseText) {
         if (this.options.llmProvider) {
           try {
@@ -660,6 +713,7 @@ export class TelegramBotClient {
             });
             const res = await this.options.llmProvider.generate(fullPrompt);
             responseText = typeof res === 'string' ? res : (res as any)?.text ?? String(res);
+            completed = true;
           } catch (err: any) {
             responseText = `Inference failed: ${err.message}`;
           } finally {
@@ -674,7 +728,32 @@ export class TelegramBotClient {
 
       const finalMessage = taskTag ? `${taskTag}\n\n${responseText}${sourcesFooter}` : `${responseText}${sourcesFooter}`;
       await this.sendMessage(chatId, finalMessage);
+      return { responseText, completed };
     });
+
+    // Post-turn memory writes run after the reply is sent, so they never delay it.
+    const turns = [...priorTurns, { role: 'user' as const, content: text }, { role: 'assistant' as const, content: turn.responseText }].slice(-MAX_TRACKED_TURNS);
+    const messageCount = conversation.messageCount + 2;
+    this.conversations.set(turnKey, { turns, messageCount });
+    if (turn.completed) {
+      await recordTaskEpisode(this.options.memoryManager, {
+        userId,
+        sessionId: memorySessionId,
+        goal: text,
+        outcome: turn.responseText,
+        executionTimeMs: Date.now() - startedAt,
+      });
+    }
+    if (this.options.llmProvider && this.options.memoryManager && shouldSummarize(messageCount)) {
+      const summarizer = await resolveSummarizer(this.options.llmProvider);
+      await summarizeAndStoreSession({
+        memory: this.options.memoryManager,
+        summarizer,
+        userId,
+        sessionId: memorySessionId,
+        turns,
+      });
+    }
   }
 
   /**
@@ -718,7 +797,8 @@ export class TelegramBotClient {
           }
           await this.handleUpdate(update);
         }
-      } catch {
+      } catch (err: unknown) {
+        logger.warn(`[TelegramBot] Polling or update handling failed: ${err instanceof Error ? err.message : String(err)}`);
         // Pacing delay on network error
         await new Promise((resolve) => setTimeout(resolve, 2000));
       }

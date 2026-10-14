@@ -7,8 +7,22 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import { z } from 'zod';
 import { ChatStore } from '../storage/chat-store.js';
-import { OllamaProvider, MockLLMProvider } from '../services/provider.js';
+import { OllamaProvider, MockLLMProvider, type LLMProvider, type GenerateStreamOptions } from '../services/provider.js';
+import type { MemoryManager } from '../memory/manager.js';
+import {
+  buildConversationContext,
+  contextBudgetFor,
+  estimateTokens,
+  parseRememberCommand,
+  recordTaskEpisode,
+  resolveSummarizer,
+  shouldSummarize,
+  summarizeAndStoreSession,
+  PROMPT_TOKEN_CAP,
+  type ConversationTurn,
+} from '../memory/context-builder.js';
 import { SearXNGClient } from '../services/searxng.js';
 import { ContentDistiller } from '../services/scraper.js';
 import { ConsensusEngine } from '../services/consensus.js';
@@ -21,6 +35,30 @@ import { config } from '../config.js';
 export interface WebServerOptions {
   port?: number;
   chatStore?: ChatStore;
+  /** Shared with the Telegram bot so both surfaces read and write one memory. */
+  memoryManager?: MemoryManager;
+  /** Memory owner for web chats; the web UI is single-owner. */
+  userId?: string;
+  /** Builds the inference provider for a chat turn; tests inject a fake here. */
+  providerFactory?: (model: string) => LLMProvider;
+}
+
+const ChatStreamRequestSchema = z.object({
+  sessionId: z.string().min(1),
+  prompt: z.string().min(1),
+  model: z.string().optional(),
+  useResearch: z.boolean().optional(),
+});
+
+type SsePayload = { chunk: string } | { sources: string[] };
+
+function streamFromProvider(provider: LLMProvider, prompt: string, options: GenerateStreamOptions): AsyncIterable<string> {
+  if (provider.generateStream) {
+    return provider.generateStream(prompt, options);
+  }
+  return (async function* () {
+    yield await provider.generate(prompt, options);
+  })();
 }
 
 export class JarvisWebServer {
@@ -28,10 +66,16 @@ export class JarvisWebServer {
   private server: http.Server | null = null;
   private chatStore: ChatStore;
   private publicDir: string;
+  private memoryManager: MemoryManager | null;
+  private userId: string;
+  private providerFactory: (model: string) => LLMProvider;
 
   constructor(options: WebServerOptions = {}) {
     this.port = options.port ?? 3000;
     this.chatStore = options.chatStore ?? new ChatStore(path.join(process.cwd(), 'data', 'chat.db'));
+    this.memoryManager = options.memoryManager ?? null;
+    this.userId = options.userId ?? 'owner';
+    this.providerFactory = options.providerFactory ?? ((model) => new OllamaProvider({ baseUrl: config.ollamaBaseUrl, model }));
     this.publicDir = path.join(process.cwd(), 'src', 'web', 'public');
   }
 
@@ -173,14 +217,19 @@ export class JarvisWebServer {
   }
 
   private async handleStreamingChat(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const body = await this.readJsonBody(req);
-    const { sessionId, prompt, model, useResearch } = body;
-
-    if (!sessionId || !prompt) {
+    const parsedBody = ChatStreamRequestSchema.safeParse(await this.readJsonBody(req));
+    if (!parsedBody.success) {
       res.writeHead(400, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Missing sessionId or prompt' }));
       return;
     }
+    const { sessionId, prompt, useResearch } = parsedBody.data;
+    const model = parsedBody.data.model || undefined;
+    const startedAt = Date.now();
+
+    // History is read before the new message is saved, so the current prompt is not duplicated into
+    // the context; it is passed separately as the request.
+    const history: ConversationTurn[] = this.chatStore.getMessages(sessionId).map((m) => ({ role: m.role, content: m.content }));
 
     // Record user message in ChatStore
     this.chatStore.addMessage({
@@ -189,12 +238,44 @@ export class JarvisWebServer {
       content: prompt,
     });
 
-    // Initialize SSE Headers
+    // Initialize SSE Headers. `X-Accel-Buffering` and `no-transform` stop proxies from buffering frames.
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
+      'Cache-Control': 'no-cache, no-transform',
       Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
     });
+    res.flushHeaders();
+
+    // Disconnects are detected on `res`, not `req`: since Node 16, `IncomingMessage` emits `close` as soon
+    // as the request body has been consumed, which has already happened in `readJsonBody`, so a `req`
+    // listener would either never fire for a dropped socket or abort every generation immediately.
+    // `res` emits `close` when the socket goes away, and `writableEnded` separates that from a normal end.
+    const abortController = new AbortController();
+    let clientGone = false;
+    res.on('close', () => {
+      if (!res.writableEnded) {
+        clientGone = true;
+        abortController.abort();
+      }
+    });
+
+    const sendEvent = async (payload: SsePayload | '[DONE]'): Promise<void> => {
+      if (clientGone || res.writableEnded) return;
+      const frame = payload === '[DONE]' ? 'data: [DONE]\n\n' : `data: ${JSON.stringify(payload)}\n\n`;
+      if (!res.write(frame)) {
+        // Waits on `close` as well as `drain`: a client that disconnects under backpressure never drains.
+        await new Promise<void>((resolve) => {
+          const done = () => {
+            res.off('drain', done);
+            res.off('close', done);
+            resolve();
+          };
+          res.once('drain', done);
+          res.once('close', done);
+        });
+      }
+    };
 
     let sources: string[] = [];
     let researchContext = '';
@@ -204,7 +285,7 @@ export class JarvisWebServer {
     const shouldResearch = useResearch || lower.includes('?') || ['search', 'find', 'what', 'why', 'how', 'who', 'where', 'when', 'explain', 'tell me', 'lookup', 'research', 'latest', 'news', 'specs', 'architecture'].some((k) => lower.includes(k));
 
     if (shouldResearch) {
-      res.write(`data: ${JSON.stringify({ chunk: '🔍 *Consulting local SearXNG metasearch & consensus...*\n\n' })}\n\n`);
+      await sendEvent({ chunk: '🔍 *Consulting local SearXNG metasearch & consensus...*\n\n' });
       try {
         const searchClient = new SearXNGClient({ enableFallback: true });
         const results = await searchClient.search(prompt, { maxResults: 3 });
@@ -219,9 +300,9 @@ export class JarvisWebServer {
         ]);
 
         researchContext = `\nCorroborated Research Facts:\n${extracted.map((e, i) => `[Source ${i + 1}]: ${e.content}`).join('\n')}\nConsensus Score: ${consensusReport.overallScore}\n`;
-        res.write(`data: ${JSON.stringify({ sources })}\n\n`);
-      } catch (err: any) {
-        logger.warn(`[JarvisWebServer] Research augmentation skipped: ${err.message}`);
+        await sendEvent({ sources });
+      } catch (err: unknown) {
+        logger.warn(`[JarvisWebServer] Research augmentation skipped: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
 
@@ -235,7 +316,7 @@ export class JarvisWebServer {
       const decision = await provisioner.ensureAndDispatch({
         prompt,
         onProgress: (msg) => {
-          res.write(`data: ${JSON.stringify({ chunk: `${msg}\n\n` })}\n\n`);
+          void sendEvent({ chunk: `${msg}\n\n` });
         },
       });
       activeModel = decision.targetModel;
@@ -245,48 +326,119 @@ export class JarvisWebServer {
       taskCategory = isCode ? 'code' : 'chat';
     }
 
-    // Step B: Inference with Ollama (or MockLLM fallback)
-    const provider = new OllamaProvider({
-      baseUrl: config.ollamaBaseUrl,
-      model: activeModel,
+    // Explicit memory writes happen before the context is built, so the fact is usable in this same reply.
+    const rememberedFact = parseRememberCommand(prompt);
+    if (rememberedFact && this.memoryManager) {
+      try {
+        await this.memoryManager.setProfileFact(this.userId, rememberedFact.key, rememberedFact.value, 'preference');
+        logger.info(`[JarvisWebServer] Stored profile fact "${rememberedFact.key}"`);
+      } catch (err: unknown) {
+        logger.warn(`[JarvisWebServer] Could not store profile fact: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    const memoryContext = await buildConversationContext({
+      memory: this.memoryManager,
+      userId: this.userId,
+      sessionId,
+      prompt,
+      turns: history,
+      maxTokens: contextBudgetFor([prompt, researchContext]),
     });
+
+    // Step B: Inference with Ollama (or MockLLM fallback)
+    const provider = this.providerFactory(activeModel);
 
     const fullPrompt = CognitionEngine.formatPrompt(prompt, {
       taskType: taskCategory === 'precision' || taskCategory === 'code' ? 'code' : taskCategory === 'reasoning' ? 'reasoning' : shouldResearch ? 'research' : 'chat',
+      memoryContext: memoryContext.text,
       researchFacts: researchContext,
       activeModel,
     });
-    let accumulatedResponse = '';
-
-    try {
-      const responseText = await provider.generate(fullPrompt, { maxTokens: 1024 });
-      accumulatedResponse = responseText;
-
-      // Stream words cleanly to frontend
-      const words = responseText.split(' ');
-      for (const word of words) {
-        res.write(`data: ${JSON.stringify({ chunk: `${word} ` })}\n\n`);
-      }
-    } catch (err: any) {
-      logger.warn(`[JarvisWebServer] Ollama stream unavailable (${err.message}). Using local engine fallback.`);
-      const mock = new MockLLMProvider({
-        cannedResponse: `Jarvis local response for: "${prompt}". Running on Radeon 8060S with verified host memory headroom.`,
-      });
-      accumulatedResponse = await mock.generate(prompt);
-      res.write(`data: ${JSON.stringify({ chunk: accumulatedResponse })}\n\n`);
+    const promptTokens = estimateTokens(fullPrompt);
+    logger.debug('[JarvisWebServer] Prompt assembled', { sessionId, promptTokens, memoryTiers: memoryContext.includedTiers });
+    if (promptTokens > PROMPT_TOKEN_CAP) {
+      logger.warn(`[JarvisWebServer] Prompt is ~${promptTokens} tokens, above the ${PROMPT_TOKEN_CAP} cap; the request itself is too long to trim.`);
     }
 
-    // Save assistant message to ChatStore
-    this.chatStore.addMessage({
-      sessionId,
-      role: 'assistant',
-      content: accumulatedResponse,
-      meta: { sources },
-    });
+    let accumulatedResponse = '';
+    let partial = false;
 
-    // Close SSE Stream
-    res.write('data: [DONE]\n\n');
-    res.end();
+    try {
+      for await (const chunk of streamFromProvider(provider, fullPrompt, { maxTokens: 1024, signal: abortController.signal })) {
+        accumulatedResponse += chunk;
+        await sendEvent({ chunk });
+        if (clientGone) break;
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (clientGone || abortController.signal.aborted) {
+        logger.info(`[JarvisWebServer] Generation aborted after client disconnect (${sessionId}).`);
+      } else if (accumulatedResponse) {
+        partial = true;
+        logger.warn(`[JarvisWebServer] Stream broke after partial output (${message}).`);
+      } else {
+        logger.warn(`[JarvisWebServer] Ollama stream unavailable (${message}). Using local engine fallback.`);
+        const mock = new MockLLMProvider({
+          cannedResponse: `Jarvis local response for: "${prompt}". Running on Radeon 8060S with verified host memory headroom.`,
+        });
+        accumulatedResponse = await mock.generate(prompt);
+        await sendEvent({ chunk: accumulatedResponse });
+      }
+    }
+    if (clientGone) partial = true;
+
+    // Save assistant message to ChatStore, including what was generated before an early disconnect.
+    if (accumulatedResponse) {
+      this.chatStore.addMessage({
+        sessionId,
+        role: 'assistant',
+        content: accumulatedResponse,
+        meta: partial ? { sources, partial: true } : { sources },
+      });
+    }
+
+    // [DONE] goes out before the memory writes, so the browser stops waiting; the response stays open
+    // only until the summary (which can take a few seconds on the small model) has been stored.
+    await sendEvent('[DONE]');
+    await this.recordTurnMemory({ sessionId, prompt, response: accumulatedResponse, partial, provider, startedAt });
+    if (!res.writableEnded) res.end();
+  }
+
+  private async recordTurnMemory(turn: {
+    sessionId: string;
+    prompt: string;
+    response: string;
+    partial: boolean;
+    provider: LLMProvider;
+    startedAt: number;
+  }): Promise<void> {
+    if (!this.memoryManager) return;
+    try {
+      if (turn.response && !turn.partial) {
+        await recordTaskEpisode(this.memoryManager, {
+          userId: this.userId,
+          sessionId: turn.sessionId,
+          goal: turn.prompt,
+          outcome: turn.response,
+          executionTimeMs: Date.now() - turn.startedAt,
+        });
+      }
+
+      const messages = this.chatStore.getMessages(turn.sessionId);
+      if (shouldSummarize(messages.length)) {
+        const summarizer = await resolveSummarizer(turn.provider);
+        await summarizeAndStoreSession({
+          memory: this.memoryManager,
+          summarizer,
+          userId: this.userId,
+          sessionId: turn.sessionId,
+          turns: messages.map((m) => ({ role: m.role, content: m.content })),
+        });
+      }
+    } catch (err: unknown) {
+      logger.warn(`[JarvisWebServer] Post-turn memory update skipped: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   private serveStaticFile(pathname: string, res: http.ServerResponse): void {
