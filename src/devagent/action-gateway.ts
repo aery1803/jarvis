@@ -39,7 +39,7 @@ export class ActionGateway {
 
   constructor(registry: OwnActionRegistry, options: ActionGatewayOptions = {}) {
     this.registry = registry;
-    this.minFreeMemoryBytes = options.minFreeMemoryBytes ?? 14 * 1024 * 1024 * 1024; // 14 GB default
+    this.minFreeMemoryBytes = options.minFreeMemoryBytes ?? 4 * 1024 * 1024 * 1024; // 4 GB default safe baseline for dev actions
   }
 
   /**
