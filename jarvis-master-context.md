@@ -1,7 +1,7 @@
 # Jarvis Local AI Agent: Master Design and Context Document
 
-**Version:** v3.7 (Gate 0, Phase 0/0b, Phase 1, Phase 2, Phase 3 Complete)
-**Status:** **IN PROGRESS - PHASE 3 (FEAT-007) MODEL ORCHESTRATION, MEMORY GOVERNOR & MULTI-AGENT COORDINATION IMPLEMENTED.** Gate 0, Phase 0 (FEAT-001), Phase 0b (FEAT-002), Phase 1 (FEAT-003), FEAT-004 (Web Chat UI), FEAT-005 (Tool Registry & MCP Client), and Phase 2 (FEAT-006 Telegram Bot & Memory Tiers) merged into `main` and marked `Done`. Feature FEAT-007 (Model Registry, Capability Checker, Memory Governor, Cascade Router, Cost Ledger, Multi-Agent Orchestrator & Evaluation Harness) implemented and verified with 82/82 unit tests across 25 suites passing (100%). Ready for PR #14 and Code Review.
+**Version:** v3.8 (Gate 0, Phase 0/0b, Phase 1, Phase 2, Phase 3, Phase 4 Complete)
+**Status:** **IN PROGRESS - PHASE 4 (FEAT-008) EMAIL WATCHER, TRIAGE & PLAYWRIGHT BROWSER AUTOMATION IMPLEMENTED.** Gate 0, Phase 0 (FEAT-001), Phase 0b (FEAT-002), Phase 1 (FEAT-003), FEAT-004 (Web Chat UI), FEAT-005 (Tool Registry & MCP Client), Phase 2 (FEAT-006 Telegram Bot & Memory Tiers), and Phase 3 (FEAT-007 Model Orchestrator & Multi-Agent Coordination) merged into `main` and marked `Done`. Feature FEAT-008 (Email Watcher, Importance Classifier, Draft Generator, Playwright Distilled Page Viewer & Browser Safeguards) implemented and verified with 89/89 unit tests across 27 suites passing (100%). Ready for PR #16 and Code Review.
 **Purpose:** The single source of truth for the Jarvis project. Holds the complete architecture, verified hardware baseline, decisions, and live Gate 0 checklist.
 
 **Labels used throughout**
@@ -1190,8 +1190,8 @@ Decision: **Claude writes everything the blueprint needs; the owner's local AI b
 | 1b | Web Chat UI & Sessions | Claude/Gemini-style Local Web Chat UI on http://localhost:3000, SSE streaming, SQLite ChatStore, markdown & syntax highlight | **DONE** (FEAT-004, PR #9 merged) |
 | 1c | Tool Registry & MCP Client | Model tool calling, parameter schemas, Tier-governed execution, MCP server client & tool bridge | **DONE** (FEAT-005, PR #10 merged) |
 | 2 | Memory, sessions, Telegram, safety | Memory manager and tiers, session and task manager, Telegram bot, Action Gateway, permission engine, audit log, kill switch | **DONE** (FEAT-006, PR #12 merged) |
-| 3 | Orchestration and quality | Model registry, capability checker, memory governor, cascade, cost ledger, evaluation harness, multi-agent orchestrator | **IMPLEMENTED** (FEAT-007, 82/82 tests pass) |
-| 4 | Email and browser | Gmail watcher with Telegram summaries and approvals; Playwright automation with logged-in profile |
+| 3 | Orchestration and quality | Model registry, capability checker, memory governor, cascade, cost ledger, evaluation harness, multi-agent orchestrator | **DONE** (FEAT-007, PR #14 merged) |
+| 4 | Email and browser | Gmail watcher with Telegram summaries and approvals; Playwright automation with logged-in profile | **IMPLEMENTED** (FEAT-008, 89/89 tests pass) |
 | 5 | Laptop, phone, voice, media | Host bridge and screen control; Android and iPhone bridges; local voice; video understanding, image editing and generation, and experimental short video generation (Section 5.10) |
 | 6 | Self-extension and learning | Skill generation with sandbox testing; owner style and work profile; experience graph and reflex compiler (Section 9.4); consolidation; routing learned from outcomes |
 | 7 | Release and distribution | Release pipeline (Section 17.8): Docker images, Windows and Linux installers, the auto-update channel with backup and rollback, and the multi-user release package. A minimal release flow exists from Phase 0b; this phase completes it |
