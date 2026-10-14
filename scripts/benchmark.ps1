@@ -7,7 +7,7 @@
 #>
 
 param(
-    [string]$Model = "qwen2.5-coder:7b",
+    [string]$Model = "qwen3:8b",
     [string]$OllamaUrl = "http://localhost:11434"
 )
 

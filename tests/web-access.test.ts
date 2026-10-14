@@ -5,7 +5,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { assertSafeBinding, isClientAllowed, isLoopbackAddress, normalizeAddress, parseAllowedIps } from '../src/web/access.js';
+import { assertSafeBinding, isClientAllowed, isHostHeaderAllowed, isOriginAllowed, isLoopbackAddress, normalizeAddress, parseAllowedIps } from '../src/web/access.js';
 import { JarvisWebServer } from '../src/web/server.js';
 import { ChatStore } from '../src/storage/chat-store.js';
 
@@ -34,6 +34,39 @@ describe('web access policy', () => {
     assert.equal(isClientAllowed('192.168.1.99', allowed), false);
     assert.equal(isClientAllowed(undefined, allowed), false);
     assert.equal(isClientAllowed('192.168.1.20', []), false);
+  });
+
+  test('matches IPv4 CIDR ranges and exact IPs', () => {
+    const allowed = ['192.168.1.0/24', '10.1.2.3'];
+    assert.equal(isClientAllowed('192.168.1.77', allowed), true);
+    assert.equal(isClientAllowed('::ffff:192.168.1.255', allowed), true);
+    assert.equal(isClientAllowed('192.168.2.1', allowed), false);
+    assert.equal(isClientAllowed('10.1.2.3', allowed), true);
+    assert.equal(isClientAllowed('10.1.2.4', allowed), false);
+    assert.equal(isClientAllowed('172.16.5.5', ['172.16.0.0/12']), true);
+    assert.equal(isClientAllowed('172.32.0.1', ['172.16.0.0/12']), false);
+    assert.equal(isClientAllowed('fe80::1', ['192.168.1.0/24']), false);
+  });
+
+  test('nonsense allowlist entries are rejected loudly', () => {
+    for (const bad of ['192.168.1.0/33', '0.0.0.0/0', 'example.com', '192.168.1/24', 'fe80::/10', '1.2.3.4/x', '999.1.1.1']) {
+      assert.throws(() => parseAllowedIps(bad), /Invalid JARVIS_WEB_ALLOWED_IPS/, bad);
+    }
+    assert.deepEqual(parseAllowedIps('192.168.1.0/24, ::1'), ['192.168.1.0/24', '::1']);
+    assert.throws(() => assertSafeBinding('0.0.0.0', ['nope']), /Invalid/);
+  });
+
+  test('host and origin checks', () => {
+    assert.equal(isHostHeaderAllowed('localhost:3000', '127.0.0.1', []), true);
+    assert.equal(isHostHeaderAllowed('192.168.1.5:3000', '0.0.0.0', []), true);
+    assert.equal(isHostHeaderAllowed('[::1]:3000', '127.0.0.1', []), true);
+    assert.equal(isHostHeaderAllowed('evil.example', '127.0.0.1', []), false);
+    assert.equal(isHostHeaderAllowed('jarvis.lan:3000', '0.0.0.0', ['http://jarvis.lan:3000']), true);
+    assert.equal(isHostHeaderAllowed(undefined, '127.0.0.1', []), false);
+    assert.equal(isOriginAllowed('http://127.0.0.1:3000', '127.0.0.1:3000', []), true);
+    assert.equal(isOriginAllowed('http://evil.example', '127.0.0.1:3000', []), false);
+    assert.equal(isOriginAllowed('null', '127.0.0.1:3000', []), false);
+    assert.equal(isOriginAllowed('http://jarvis.lan:3000', '127.0.0.1:3000', ['http://jarvis.lan:3000']), true);
   });
 
   test('binding beyond loopback requires an allowlist', () => {

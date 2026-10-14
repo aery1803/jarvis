@@ -17,8 +17,10 @@ search:
 
 server:
   port: 8080
+  # Binds all interfaces inside the container only; docker-compose.yml publishes the port on 127.0.0.1.
   bind_address: "0.0.0.0"
-  secret_key: "jarvis-local-searxng-instance-key-replace-in-production"
+  # Set SEARXNG_SECRET in docker-compose.yml (environment); SearXNG reads it over this value. No secret is committed.
+  secret_key: ""
   limiter: false
   image_proxy: false
 

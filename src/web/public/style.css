@@ -579,3 +579,115 @@ body {
   color: var(--text-muted);
   margin-top: 8px;
 }
+
+/* Status and kill switch */
+.status-dot.is-ok {
+  background-color: var(--success);
+  box-shadow: 0 0 6px var(--success);
+}
+
+.status-dot.is-bad {
+  background-color: var(--danger);
+  box-shadow: 0 0 6px var(--danger);
+}
+
+.status-dot.is-unknown {
+  background-color: var(--text-muted);
+  box-shadow: none;
+}
+
+.status-text {
+  white-space: pre-line;
+}
+
+.kill-banner {
+  padding: 10px 16px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.kill-banner[hidden] {
+  display: none;
+}
+
+/* Stream errors */
+.stream-error {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--danger);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 77, 79, 0.1);
+  color: var(--danger);
+  font-size: 0.85rem;
+}
+
+.empty-sessions {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  padding: 8px;
+}
+
+/* Benchmark */
+.benchmark-btn {
+  width: 100%;
+  padding: 8px 12px;
+  background: var(--bg-card);
+  color: var(--accent-cyan);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.benchmark-btn:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.benchmark-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 14px;
+}
+
+.benchmark-title {
+  margin: 0 0 8px;
+  color: var(--accent-cyan);
+  font-size: 1rem;
+}
+
+.benchmark-headline {
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.benchmark-score {
+  color: var(--success);
+}
+
+.benchmark-meta {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  margin-bottom: 12px;
+}
+
+.benchmark-categories {
+  line-height: 1.6;
+  margin-bottom: 10px;
+}
+
+.benchmark-lane {
+  border-top: 1px solid var(--border-color);
+  padding-top: 8px;
+  font-size: 0.9rem;
+  color: var(--accent-cyan);
+}

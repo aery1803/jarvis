@@ -19,7 +19,15 @@ export type ActionType =
   | 'LABEL_ADD'
   | 'LABEL_REMOVE'
   | 'SHELL_EXEC'
-  | 'EMAIL_SEND';
+  | 'EMAIL_SEND'
+  | 'BOARD_POLL'
+  | 'TOOL_CALL'
+  | 'BROWSER_ACTION'
+  | 'PHONE_ACTION'
+  | 'HOST_COMMAND'
+  | 'MODEL_PULL';
+
+export type ActionStatus = 'started' | 'succeeded' | 'failed' | 'denied' | 'forbidden';
 
 export interface OwnActionRecord {
   id: string;
@@ -28,6 +36,8 @@ export interface OwnActionRecord {
   signature?: string;
   createdAt: string;
   metadata?: string;
+  status?: ActionStatus;
+  outcome?: string;
 }
 
 export interface GatewayActionRequest {

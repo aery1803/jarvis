@@ -6,7 +6,7 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
-import { JarvisWebServer } from '../web/server.js';
+import { JarvisWebServer, installProcessGuard } from '../web/server.js';
 import { TelegramBotClient } from '../telegram/bot.js';
 import { getTelegramToken, getTelegramOwnerId } from '../security/credentials.js';
 import { DocumentStore } from '../storage/collection.js';
@@ -22,7 +22,26 @@ import { BoardWatcher } from '../devagent/board-watcher.js';
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 
+const WEB_START_ATTEMPTS = 5;
+const WEB_START_RETRY_MS = 2_000;
+
+/** A previous instance can still hold the port for a moment after nodemon restarts the launcher, so a busy port is retried. */
+async function startWebServer(server: JarvisWebServer): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await server.start();
+      return;
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (attempt >= WEB_START_ATTEMPTS || !/already in use/.test(message)) throw err;
+      logger.warn(`[Web] ${message} Retrying in ${WEB_START_RETRY_MS / 1000}s (${attempt}/${WEB_START_ATTEMPTS})...`);
+      await new Promise((resolve) => setTimeout(resolve, WEB_START_RETRY_MS));
+    }
+  }
+}
+
 async function startAll(): Promise<void> {
+  installProcessGuard();
   console.log('\n======================================================');
   console.log('       ⚡ JARVIS LOCAL AI AGENT - MASTER LAUNCHER ⚡    ');
   console.log('       Private Autonomous AI on ASUS ROG Flow Z13      ');
@@ -46,7 +65,7 @@ async function startAll(): Promise<void> {
   const killSwitch = new KillSwitch(store, sessionManager);
   const llmProvider = new OllamaProvider({
     baseUrl: config.ollamaBaseUrl,
-    model: 'qwen2.5:7b',
+    model: config.defaultModel,
   });
 
   // 3. Start Local Web Workstation
@@ -59,9 +78,16 @@ async function startAll(): Promise<void> {
   } catch (err: unknown) {
     logger.error(`[ChatMigration] data/chat.db import failed; it is retried on the next start: ${err instanceof Error ? err.message : String(err)}`);
   }
-  const webPort = process.env.PORT ? Number.parseInt(process.env.PORT, 10) : 3000;
+  const parsedPort = Number.parseInt(process.env.PORT ?? '', 10);
+  const webPort = Number.isInteger(parsedPort) && parsedPort >= 0 && parsedPort < 65536 ? parsedPort : 3000;
   const webServer = new JarvisWebServer({ port: webPort, sessionManager, memoryManager, userId: webUserId });
-  await webServer.start();
+  try {
+    await startWebServer(webServer);
+  } catch (err: unknown) {
+    logger.error(`[Web] Could not start the web server: ${err instanceof Error ? err.message : String(err)}`);
+    store.close();
+    process.exit(1);
+  }
   console.log(`[1/3] 🌐 Web Chat UI:     Online at http://localhost:${webPort}`);
 
   // 4. Start Telegram Bot Daemon

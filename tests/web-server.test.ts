@@ -5,12 +5,25 @@
 
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { JarvisWebServer } from '../src/web/server.js';
+import http from 'node:http';
+import { JarvisWebServer, shouldResearchPrompt } from '../src/web/server.js';
 import { ChatStore } from '../src/storage/chat-store.js';
 import { DocumentStore } from '../src/storage/collection.js';
 import { MemoryManager } from '../src/memory/manager.js';
 import { SessionManager } from '../src/sessions/manager.js';
 import type { GenerateOptions, GenerateStreamOptions, LLMProvider } from '../src/services/provider.js';
+
+const JSON_HEADERS = { 'Content-Type': 'application/json', 'X-Jarvis-Client': 'web' };
+
+const FAKE_OLLAMA = {
+  baseUrl: 'http://fake-ollama.local',
+  reachable: true,
+  loaded: [],
+  installed: [
+    { name: 'qwen3:8b', sizeBytes: 5225388164, parameterSize: '8.2B', quantization: 'Q4_K_M', family: 'qwen3' },
+    { name: 'qwen3:32b', sizeBytes: 20201253829, parameterSize: '32.8B', quantization: 'Q4_K_M', family: 'qwen3' },
+  ],
+};
 
 describe('JarvisWebServer', () => {
   let server: JarvisWebServer;
@@ -22,6 +35,10 @@ describe('JarvisWebServer', () => {
     server = new JarvisWebServer({
       port: 3099,
       chatStore,
+      probes: {
+        ollama: async () => FAKE_OLLAMA,
+        gpu: async () => ({ probe: 'llama.cpp', devices: [{ index: 0, backend: 'Vulkan', name: 'Radeon 8060S', totalBytes: 48 * 2 ** 30, freeBytes: 45 * 2 ** 30 }] }),
+      },
     });
     await server.start();
     baseUrl = 'http://127.0.0.1:3099';
@@ -43,7 +60,7 @@ describe('JarvisWebServer', () => {
   test('POST /api/sessions creates a new chat session', async () => {
     const res = await fetch(`${baseUrl}/api/sessions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_HEADERS,
       body: JSON.stringify({ title: 'New Web Chat', model: 'qwen2.5:7b' }),
     });
 
@@ -70,15 +87,208 @@ describe('JarvisWebServer', () => {
     assert.match(text, /Jarvis/i);
   });
 
-  test('GET /api/models returns available models and active model', async () => {
+  test('GET /api/models reports installed models with sizes and the real default as active', async () => {
     const res = await fetch(`${baseUrl}/api/models`);
     assert.equal(res.status, 200);
     const json = (await res.json()) as any;
-    assert.ok(Array.isArray(json.models));
-    assert.ok(json.models.length > 0);
-    assert.ok(json.active);
+    assert.deepEqual(json.models, ['qwen3:8b', 'qwen3:32b']);
+    assert.equal(json.active, 'qwen3:8b');
+    assert.equal(json.activeInstalled, true);
+    assert.equal(json.modelDetails[1].sizeBytes, 20201253829);
+  });
+
+  test('GET /api/health adds both memory pools once the cached GPU probe has landed', async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const json = (await (await fetch(`${baseUrl}/api/health`)).json()) as any;
+    assert.equal(json.vramTotalBytes, 48 * 2 ** 30);
+    assert.equal(json.vramFreeBytes, 45 * 2 ** 30);
+    assert.equal(json.killSwitch, undefined);
+  });
+
+  test('requests whose URL starts with // do not crash the process and are refused or 404', async () => {
+    for (const target of ['//', '//etc/passwd', '///x', '/%2e%2e/%2e%2e/package.json', '/..%2f..%2fpackage.json', '/%00', '/%zz']) {
+      const res = await rawGet(3099, target);
+      assert.ok([400, 404].includes(res.status), `${target} -> ${res.status}`);
+    }
+    assert.equal((await fetch(`${baseUrl}/api/health`)).status, 200);
+  });
+
+  test('a directory is not served and unknown extensions get a safe content type', async () => {
+    assert.equal((await rawGet(3099, '/')).status, 200);
+    const js = await fetch(`${baseUrl}/app.js`);
+    assert.equal(js.headers.get('cache-control'), 'no-store');
+    assert.match(js.headers.get('content-type') ?? '', /javascript/);
+    assert.equal(js.headers.get('access-control-allow-origin'), null);
+    assert.equal(js.headers.get('x-content-type-options'), 'nosniff');
+  });
+
+  test('never sends CORS headers and refuses preflights', async () => {
+    const res = await fetch(`${baseUrl}/api/sessions`, { method: 'OPTIONS', headers: { Origin: 'http://evil.example' } });
+    assert.equal(res.status, 405);
+    assert.equal(res.headers.get('access-control-allow-origin'), null);
+  });
+
+  test('state-changing requests need X-Jarvis-Client and a same-origin Origin', async () => {
+    const noHeader = await fetch(`${baseUrl}/api/sessions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    assert.equal(noHeader.status, 403);
+    const evil = await fetch(`${baseUrl}/api/sessions`, { method: 'POST', headers: { ...JSON_HEADERS, Origin: 'http://evil.example' }, body: '{}' });
+    assert.equal(evil.status, 403);
+    const same = await fetch(`${baseUrl}/api/sessions`, { method: 'POST', headers: { ...JSON_HEADERS, Origin: baseUrl }, body: '{}' });
+    assert.equal(same.status, 201);
+    const del = await fetch(`${baseUrl}/api/sessions/abc`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } });
+    assert.equal(del.status, 403);
+  });
+
+  test('a foreign Host header (DNS rebinding) is refused', async () => {
+    const res = await rawGet(3099, '/api/sessions', { Host: 'evil.example:3099' });
+    assert.equal(res.status, 403);
+  });
+
+  test('request bodies: invalid JSON is 400, wrong content type 415, oversize 413, multi-byte text survives', async () => {
+    const bad = await fetch(`${baseUrl}/api/sessions`, { method: 'POST', headers: JSON_HEADERS, body: '{not json' });
+    assert.equal(bad.status, 400);
+    const wrongType = await fetch(`${baseUrl}/api/sessions`, { method: 'POST', headers: { 'Content-Type': 'text/plain', 'X-Jarvis-Client': 'web' }, body: '{}' });
+    assert.equal(wrongType.status, 415);
+    const huge = await fetch(`${baseUrl}/api/sessions`, { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ title: 'x'.repeat(1024 * 1024 + 10) }) });
+    assert.equal(huge.status, 413);
+    const title = '日本語🙂'.repeat(5000);
+    const ok = await fetch(`${baseUrl}/api/sessions`, { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ title }) });
+    assert.equal(ok.status, 201);
+    assert.equal(((await ok.json()) as any).title, title);
+  });
+
+  test('a new session without a model gets the configured default, not an uninstalled one', async () => {
+    const res = await fetch(`${baseUrl}/api/sessions`, { method: 'POST', headers: JSON_HEADERS, body: '{}' });
+    assert.equal(((await res.json()) as any).model, 'qwen3:8b');
+  });
+
+  test('GET /api/benchmark is refused; benchmarks are POST only', async () => {
+    const res = await fetch(`${baseUrl}/api/benchmark`);
+    assert.equal(res.status, 405);
   });
 });
+
+describe('JarvisWebServer startup failures', () => {
+  test('start() rejects with a clear message when the port is taken', async () => {
+    const first = new JarvisWebServer({ port: 0, chatStore: new ChatStore(':memory:') });
+    await first.start();
+    const second = new JarvisWebServer({ port: first.getPort(), chatStore: new ChatStore(':memory:') });
+    try {
+      await assert.rejects(second.start(), /already in use/);
+    } finally {
+      await second.stop();
+      await first.stop();
+    }
+  });
+});
+
+describe('JarvisWebServer models and benchmark failure modes', () => {
+  test('/api/models is 503 with an empty list when Ollama is unreachable', async () => {
+    const server = new JarvisWebServer({
+      port: 0,
+      chatStore: new ChatStore(':memory:'),
+      probes: { ollama: async () => ({ baseUrl: 'x', reachable: false, installed: [], loaded: [], error: 'connect ECONNREFUSED' }) },
+    });
+    await server.start();
+    try {
+      const res = await fetch(`http://127.0.0.1:${server.getPort()}/api/models`);
+      assert.equal(res.status, 503);
+      const json = (await res.json()) as any;
+      assert.deepEqual(json.models, []);
+      assert.match(json.error, /ECONNREFUSED/);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('a benchmark against a failing model is a 502 error, not a scorecard of zeros', async () => {
+    const failing: LLMProvider = {
+      generate: async () => {
+        throw new Error('model not found');
+      },
+      chat: async () => '',
+      getModel: () => 'qwen3:8b',
+      getBaseUrl: () => 'http://fake',
+    };
+    const server = new JarvisWebServer({ port: 0, chatStore: new ChatStore(':memory:'), providerFactory: () => failing });
+    await server.start();
+    try {
+      const res = await fetch(`http://127.0.0.1:${server.getPort()}/api/benchmark`, { method: 'POST', headers: JSON_HEADERS, body: '{}' });
+      assert.equal(res.status, 502);
+      assert.match(((await res.json()) as any).error, /model not found/);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  test('a second benchmark while one runs is 409', async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const slow: LLMProvider = {
+      generate: async () => {
+        await gate;
+        return 'Yes 1:30 PM';
+      },
+      chat: async () => '',
+      getModel: () => 'qwen3:8b',
+      getBaseUrl: () => 'http://fake',
+    };
+    const server = new JarvisWebServer({ port: 0, chatStore: new ChatStore(':memory:'), providerFactory: () => slow });
+    await server.start();
+    try {
+      const url = `http://127.0.0.1:${server.getPort()}/api/benchmark`;
+      const first = fetch(url, { method: 'POST', headers: JSON_HEADERS, body: '{}' });
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      const second = await fetch(url, { method: 'POST', headers: JSON_HEADERS, body: '{}' });
+      assert.equal(second.status, 409);
+      release();
+      assert.equal((await first).status, 200);
+    } finally {
+      release();
+      await server.stop();
+    }
+  });
+
+  test('the kill switch refuses chat with 503 and shows up in /api/health', async () => {
+    const server = new JarvisWebServer({
+      port: 0,
+      chatStore: new ChatStore(':memory:'),
+      killSwitch: { isKilled: () => true, getKillReason: () => 'owner pressed stop' },
+    });
+    await server.start();
+    try {
+      const base = `http://127.0.0.1:${server.getPort()}`;
+      const health = (await (await fetch(`${base}/api/health`)).json()) as any;
+      assert.deepEqual(health.killSwitch, { engaged: true, reason: 'owner pressed stop' });
+      const chat = await fetch(`${base}/api/chat/stream`, { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ sessionId: 'x', prompt: 'hi' }) });
+      assert.equal(chat.status, 503);
+    } finally {
+      await server.stop();
+    }
+  });
+});
+
+describe('research gating', () => {
+  test('an explicit toggle wins; the heuristic only applies when it is absent', () => {
+    assert.equal(shouldResearchPrompt('what is the latest news?', false), false);
+    assert.equal(shouldResearchPrompt('hello', true), true);
+    assert.equal(shouldResearchPrompt('search for ryzen ai max specs', undefined), true);
+    assert.equal(shouldResearchPrompt('what is a closure?', undefined), false);
+    assert.equal(shouldResearchPrompt('The newsletter is ready', undefined), false);
+  });
+});
+
+function rawGet(port: number, target: string, headers: Record<string, string> = {}): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const req = http.request({ host: '127.0.0.1', port, path: target, method: 'GET', headers }, (res) => {
+      let body = '';
+      res.on('data', (chunk) => (body += chunk));
+      res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
 
 /**
  * Records every prompt it receives and streams a fixed reply in several chunks.
@@ -154,7 +364,7 @@ describe('JarvisWebServer chat streaming and memory', () => {
   async function createSession(): Promise<string> {
     const res = await fetch(`${baseUrl}/api/sessions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_HEADERS,
       body: JSON.stringify({ title: 'Memory test', model: 'test-model:1b' }),
     });
     const session = (await res.json()) as { id: string };
@@ -165,7 +375,7 @@ describe('JarvisWebServer chat streaming and memory', () => {
   async function sendChat(sessionId: string, prompt: string): Promise<{ res: Response; frames: string[] }> {
     const res = await fetch(`${baseUrl}/api/chat/stream`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_HEADERS,
       body: JSON.stringify({ sessionId, prompt, model: 'test-model:1b', useResearch: false }),
     });
     const body = await res.text();
@@ -192,10 +402,57 @@ describe('JarvisWebServer chat streaming and memory', () => {
     assert.equal(messages[1].meta?.partial, undefined);
   });
 
+  test('a model that fails with no output yields an SSE error frame and no fabricated assistant message', async () => {
+    const broken: LLMProvider = {
+      generate: async () => '',
+      generateStream: () => {
+        throw new Error('model "qwen3:8b" not found');
+      },
+      chat: async () => '',
+      getModel: () => 'qwen3:8b',
+      getBaseUrl: () => 'http://fake',
+    };
+    const searches: string[] = [];
+    const failServer = new JarvisWebServer({
+      port: port + 5,
+      chatStore: new ChatStore(':memory:'),
+      providerFactory: () => broken,
+      searchClientFactory: () => ({
+        search: async (query: string) => {
+          searches.push(query);
+          return [];
+        },
+      }),
+    });
+    await failServer.start();
+    try {
+      const base = `http://127.0.0.1:${port + 5}`;
+      const { id } = (await (await fetch(`${base}/api/sessions`, { method: 'POST', headers: JSON_HEADERS, body: '{}' })).json()) as { id: string };
+      const res = await fetch(`${base}/api/chat/stream`, {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ sessionId: id, prompt: 'what is the latest news?', model: 'qwen3:8b', useResearch: false }),
+      });
+      const frames = (await res.text())
+        .split('\n\n')
+        .filter((f) => f.startsWith('data: '))
+        .map((f) => f.slice(6));
+      assert.equal(frames.length, 2);
+      assert.match(JSON.parse(frames[0]).error, /not found/);
+      assert.equal(frames[1], '[DONE]');
+      assert.ok(!frames.some((f) => f.includes('Jarvis local response')));
+      const store = (failServer as unknown as { chatStore: ChatStore }).chatStore;
+      assert.deepEqual((await store.getMessages(id)).map((m) => m.role), ['user']);
+      assert.deepEqual(searches, [], 'useResearch:false must not touch the internet');
+    } finally {
+      await failServer.stop();
+    }
+  });
+
   test('rejects a request without a prompt', async () => {
     const res = await fetch(`${baseUrl}/api/chat/stream`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_HEADERS,
       body: JSON.stringify({ sessionId: 'x' }),
     });
     assert.equal(res.status, 400);
@@ -226,7 +483,7 @@ describe('JarvisWebServer chat streaming and memory', () => {
     await sendChat(secondSession, 'Brand new chat here');
     const prompt = provider.chatPrompts[before];
     assert.ok(!prompt.includes('ISOLATION-MARKER-ALPHA'), prompt);
-    assert.ok(!prompt.includes('Another line for the first chat'));
+    // Past-task episodes (goal -> outcome) are a separate, shared tier, so the first chat's goals may appear there.
     assert.ok(prompt.includes('SESSION-SUMMARY'), 'other sessions\' summaries are shared (T2)');
   });
 
@@ -262,12 +519,12 @@ describe('JarvisWebServer chat streaming and memory', () => {
     });
     await slowServer.start();
     try {
-      const sessionRes = await fetch(`http://127.0.0.1:${port + 1}/api/sessions`, { method: 'POST', body: '{}' });
+      const sessionRes = await fetch(`http://127.0.0.1:${port + 1}/api/sessions`, { method: 'POST', headers: JSON_HEADERS, body: '{}' });
       const { id: sessionId } = (await sessionRes.json()) as { id: string };
       const controller = new AbortController();
       const res = await fetch(`http://127.0.0.1:${port + 1}/api/chat/stream`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: JSON_HEADERS,
         signal: controller.signal,
         body: JSON.stringify({ sessionId, prompt: 'Slow reply please', model: 'test-model:1b' }),
       });
@@ -323,7 +580,7 @@ describe('JarvisWebServer over the shared SessionManager', () => {
   test('a session created on the web is a SessionManager session of the owner, with its turns', async () => {
     const res = await fetch(`${baseUrl}/api/sessions`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_HEADERS,
       body: JSON.stringify({ title: 'Web chat', model: 'test-model:1b' }),
     });
     assert.equal(res.status, 201);
@@ -331,7 +588,7 @@ describe('JarvisWebServer over the shared SessionManager', () => {
 
     await fetch(`${baseUrl}/api/chat/stream`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_HEADERS,
       body: JSON.stringify({ sessionId, prompt: 'Hello from the browser', model: 'test-model:1b', useResearch: false }),
     }).then((r) => r.text());
 
@@ -375,7 +632,7 @@ describe('JarvisWebServer over the shared SessionManager', () => {
     const before = provider.chatPrompts.length;
     await fetch(`${baseUrl}/api/chat/stream`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_HEADERS,
       body: JSON.stringify({ sessionId: telegramSession.id, prompt: 'Continuing on the web', model: 'test-model:1b', useResearch: false }),
     }).then((r) => r.text());
     assert.ok(provider.chatPrompts[before].includes('TG-WEB-MARKER asked on Telegram'), provider.chatPrompts[before]);
@@ -389,7 +646,7 @@ describe('JarvisWebServer over the shared SessionManager', () => {
 
     const res = await fetch(`${baseUrl}/api/chat/stream`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_HEADERS,
       body: JSON.stringify({ sessionId: stranger.id, prompt: 'Sneaky write', model: 'test-model:1b', useResearch: false }),
     });
     assert.equal(res.status, 404);
@@ -400,7 +657,7 @@ describe('JarvisWebServer over the shared SessionManager', () => {
     const before = provider.chatPrompts.length;
     const res = await fetch(`${baseUrl}/api/chat/stream`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_HEADERS,
       body: JSON.stringify({ sessionId: 'sess-does-not-exist', prompt: 'Anyone there', model: 'test-model:1b', useResearch: false }),
     });
     assert.equal(res.status, 404);

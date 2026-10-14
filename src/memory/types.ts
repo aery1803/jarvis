@@ -45,6 +45,12 @@ export interface KnowledgeItem {
   sourceUrl?: string;
   tags: string[];
   createdAt: string;
+  /** sha256 of the normalized content, set by `saveResearchKnowledge` to dedupe re-fetched pages. */
+  contentHash?: string;
+  /** Items past this ISO time are ignored by search and pruned on the next research save. */
+  expiresAt?: string;
+  /** True for text that came from the web; it is only ever shown to a model as fenced data. */
+  untrusted?: boolean;
 }
 
 export interface EncryptedItem {
@@ -55,7 +61,10 @@ export interface EncryptedItem {
   ciphertext: string;
   iv: string;
   authTag: string;
+  /** Id of the vault key that encrypted this row; absent on rows written before key ids existed. */
+  keyId?: string;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface WorkingContext {

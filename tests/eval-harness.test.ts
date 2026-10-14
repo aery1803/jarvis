@@ -102,7 +102,9 @@ describe('EvaluationHarness & Benchmark Suite', () => {
 
     assert.ok(fullPrompt.includes('Owner prefers functional style'));
     assert.ok(fullPrompt.includes('[Source 1]: BST algorithm'));
-    assert.ok(fullPrompt.includes('Consensus Confidence: 95%'));
+    assert.ok(fullPrompt.includes('Source agreement: 95%'));
+    assert.ok(!/Verified External/i.test(fullPrompt));
+    assert.match(fullPrompt, /<untrusted_data>\n\[Source 1\]: BST algorithm standard implementation\n<\/untrusted_data>/);
     assert.ok(fullPrompt.includes('User Request: Implement a binary search tree'));
   });
 

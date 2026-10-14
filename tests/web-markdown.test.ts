@@ -5,7 +5,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatMarkdown, formatStreamingMarkdown, splitStableMarkdown } from '../src/web/public/markdown.js';
+import { formatFinalMarkdown, formatMarkdown, formatStreamingMarkdown, splitStableMarkdown } from '../src/web/public/markdown.js';
 
 function countOf(haystack: string, pattern: RegExp): number {
   return (haystack.match(pattern) ?? []).length;
@@ -77,6 +77,33 @@ describe('formatMarkdown', () => {
 
   test('code blocks get a copy button', () => {
     assert.ok(formatMarkdown('```\nx\n```').includes('class="copy-code-btn"'));
+  });
+});
+
+describe('emphasis nesting', () => {
+  test('crossed or interleaved delimiters never produce mis-nested tags', () => {
+    const samples = ['**a *b** c*', '*a **b* c**', '__a _b__ c_', '**bold *and italic* still bold**', '*x* **y** *z*', '***both***', '**a** and *b **c***', '**unclosed *x*'];
+    for (const sample of samples) {
+      const html = formatMarkdown(sample);
+      assertBalanced(html);
+      assert.ok(!/<strong>[^<]*<em>[^<]*<\/strong>/.test(html), html);
+      assert.ok(!/<em>[^<]*<strong>[^<]*<\/em>/.test(html), html);
+    }
+    assert.equal(formatMarkdown('**bold *and italic* still bold**'), '<p><strong>bold <em>and italic</em> still bold</strong></p>');
+  });
+});
+
+describe('formatFinalMarkdown', () => {
+  test('a reply truncated inside a code fence stays a code block, not literal backticks', () => {
+    const html = formatFinalMarkdown('Here:\n```ts\nconst a = 1;');
+    assert.ok(!html.includes('```'), html);
+    assert.ok(html.includes('const a = 1;'));
+    assertBalanced(html);
+  });
+
+  test('a complete reply renders exactly like formatMarkdown', () => {
+    const text = 'Done **now**.\n\n```\nx\n```';
+    assert.equal(formatFinalMarkdown(text), formatMarkdown(text));
   });
 });
 

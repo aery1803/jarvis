@@ -3,18 +3,19 @@
  * Downloads the requested heavy models sequentially in order of size.
  */
 
-const { spawn, execSync } = require('child_process');
+const { spawn, execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
 const modelsToDownload = [
+  { id: 'qwen3:8b', size: '~5.2 GB', desc: 'Qwen 3 8B resident baseline' },
   { id: 'qwen3:14b', size: '~9.3 GB', desc: 'Qwen 3 14B High-Intelligence Mid-Tier' },
-  { id: 'qwen3.8:27b', size: '~16.5 GB', desc: 'Qwen 3.8 27B High-Accuracy Reasoning' },
+  { id: 'qwen3.8:27b', size: '~17.7 GB', desc: 'Qwen 3.8 27B High-Accuracy Reasoning' },
   { id: 'qwen3:32b', size: '~20 GB', desc: 'Qwen 3 32B Dense Powerhouse' },
   { id: 'rnogy/Nvidia_Llama-3_3-Nemotron-Super-49B-v1_5:q4_K_M', size: '~30.2 GB', desc: 'NVIDIA Llama 3.3 Nemotron Super 49B v1.5 Reasoning' },
   { id: 'bartowski/moonshotai_Kimi-Linear-48B-A3B-Instruct-GGUF', isGGUF: true, hfRepo: 'bartowski/moonshotai_Kimi-Linear-48B-A3B-Instruct-GGUF', hfFile: 'moonshotai_Kimi-Linear-48B-A3B-Instruct-Q4_K_M.gguf', size: '~29.8 GB', desc: 'Moonshot AI Kimi Linear 48B-A3B MoE (3B Active, 1M Context)' },
-  { id: 'deepseek-r1:70b', size: '~43 GB', desc: 'DeepSeek R1 70B Flagship CoT Reasoning' },
-  { id: 'qwen3:72b', isGGUF: true, hfRepo: 'mradermacher/Qwen3-72B-Instruct-GGUF', hfFile: 'Qwen3-72B-Instruct.Q4_K_M.gguf', size: '~47.4 GB', desc: 'Qwen 3 72B Flagship Multi-Domain Synthesis (Q4_K_M)' }
+  { id: 'deepseek-r1:70b', size: '~42.5 GB', desc: 'DeepSeek R1 70B Flagship CoT Reasoning' },
+  { id: 'qwen3:72b', size: '~47.4 GB', desc: 'Qwen 3 72B Flagship Multi-Domain Synthesis (Q4_K_M)' }
 ];
 
 const logDir = path.join(__dirname, '..', 'data');
@@ -29,7 +30,7 @@ function log(msg) {
 
 function getInstalledModels() {
   try {
-    const out = execSync('ollama list', { encoding: 'utf8' });
+    const out = execFileSync('ollama', ['list'], { encoding: 'utf8' });
     return out.split('\n').slice(1).map(l => l.split(/\s+/)[0]).filter(Boolean);
   } catch (e) {
     return [];
@@ -103,13 +104,13 @@ async function main() {
     // Cleanup older models once modern replacements are ready
     if (m.id === 'qwen3:14b') {
       try {
-        execSync('ollama rm qwen2.5:14b', { encoding: 'utf8' });
+        execFileSync('ollama', ['rm', 'qwen2.5:14b'], { encoding: 'utf8' });
         log('Removed legacy qwen2.5:14b to free disk space.');
       } catch (_) {}
     }
     if (m.id === 'qwen3:32b') {
       try {
-        execSync('ollama rm qwen2.5-coder:32b', { encoding: 'utf8' });
+        execFileSync('ollama', ['rm', 'qwen2.5-coder:32b'], { encoding: 'utf8' });
         log('Removed legacy qwen2.5-coder:32b to free disk space.');
       } catch (_) {}
     }

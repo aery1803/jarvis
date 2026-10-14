@@ -49,6 +49,43 @@ export class CostLedger {
     return record;
   }
 
+  /** Chat-path convenience: clamps non-finite or negative counts to 0 so one bad usage report cannot poison the summaries. */
+  async recordUsage(usage: {
+    model: string;
+    lane: string;
+    taskId?: string;
+    agentId?: string;
+    promptTokens: number;
+    completionTokens: number;
+    latencyMs: number;
+  }): Promise<LedgerEntry> {
+    const clean = (n: number) => (Number.isFinite(n) && n > 0 ? Math.round(n) : 0);
+    return this.record({
+      modelId: usage.model,
+      lane: usage.lane,
+      taskId: usage.taskId,
+      agentId: usage.agentId,
+      promptTokens: clean(usage.promptTokens),
+      completionTokens: clean(usage.completionTokens),
+      latencyMs: clean(usage.latencyMs),
+    });
+  }
+
+  async listByModel(modelId: string, limit = 20): Promise<LedgerEntry[]> {
+    const rows = await this.collection.find({ modelId } as Record<string, unknown>);
+    return newestFirst(rows, (entry) => entry.timestamp).slice(0, limit);
+  }
+
+  async getSummaryByModel(): Promise<Record<string, LedgerSummary>> {
+    const all = await this.collection.find({});
+    const modelIds = Array.from(new Set(all.map((e) => e.modelId)));
+    const result: Record<string, LedgerSummary> = {};
+    for (const modelId of modelIds) {
+      result[modelId] = await this.getSummary({ modelId });
+    }
+    return result;
+  }
+
   async listRecent(limit = 20): Promise<LedgerEntry[]> {
     const all = await this.collection.find({});
     return newestFirst(all, (entry) => entry.timestamp).slice(0, limit);

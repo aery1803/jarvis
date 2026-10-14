@@ -31,15 +31,35 @@ function codeBlockHtml(lang, code) {
   );
 }
 
+function isWellNested(html) {
+  const tag = /<(\/?)(strong|em)>/g;
+  const open = [];
+  for (const match of html.matchAll(tag)) {
+    if (!match[1]) {
+      open.push(match[2]);
+    } else if (open.pop() !== match[2]) {
+      return false;
+    }
+  }
+  return open.length === 0;
+}
+
 function renderEmphasis(text) {
+  // A match whose content would split another tag (crossed delimiters like `**a *b** c*`) stays literal,
+  // so the output is always well-formed.
+  const wrap = (tagName, lead = '') => (match, ...groups) => {
+    const inner = groups[lead ? 1 : 0];
+    if (!isWellNested(inner)) return match;
+    return `${lead ? groups[0] : ''}<${tagName}>${inner}</${tagName}>`;
+  };
   return (
     text
-      .replace(/\*\*(?=[^\s*])([^\n]*?[^\s*])\*\*/g, '<strong>$1</strong>')
-      .replace(/(^|[^\w])__(?=[^\s_])([^\n]*?[^\s_])__(?!\w)/g, '$1<strong>$2</strong>')
+      .replace(/\*\*(?=[^\s*])([^\n]*?[^\s*])\*\*/g, wrap('strong'))
+      .replace(/(^|[^\w])__(?=[^\s_])([^\n]*?[^\s_])__(?!\w)/g, wrap('strong', 'lead'))
       // Openers must touch a word and closers must not be followed by one, so `2 * 3 * 4` and
       // `my_var_name` stay literal.
-      .replace(/(^|[^\w*])\*(?=[^\s*])([^*\n]*?[^\s*])\*(?![\w*])/g, '$1<em>$2</em>')
-      .replace(/(^|[^\w])_(?=[^\s_])([^_\n]*?[^\s_])_(?!\w)/g, '$1<em>$2</em>')
+      .replace(/(^|[^\w*])\*(?=[^\s*])([^*\n]*?[^\s*])\*(?![\w*])/g, wrap('em', 'lead'))
+      .replace(/(^|[^\w])_(?=[^\s_])([^_\n]*?[^\s_])_(?!\w)/g, wrap('em', 'lead'))
   );
 }
 
@@ -235,4 +255,12 @@ export function formatStreamingMarkdown(text) {
     html += `<p class="streaming-tail">${escapeHtml(tail)}</p>`;
   }
   return html;
+}
+
+/**
+ * Renders a finished (or aborted) reply. A reply cut off inside a code fence keeps its open-fence rendering
+ * instead of falling back to literal backticks; everything else renders as plain Markdown.
+ */
+export function formatFinalMarkdown(text) {
+  return splitStableMarkdown(text).tailIsCode ? formatStreamingMarkdown(text) : formatMarkdown(text);
 }

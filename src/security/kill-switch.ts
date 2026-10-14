@@ -1,6 +1,32 @@
 import { DocumentStore, Collection } from '../storage/collection.js';
 import { SessionManager } from '../sessions/manager.js';
 import { newestFirst } from '../utils/ordering.js';
+import { logger } from '../utils/logger.js';
+
+export const KILL_SWITCH_STATE_COLLECTION = 'kill_switch_state';
+const KILL_SWITCH_STATE_ID = 'state';
+
+interface KillSwitchStateDoc {
+  id: string;
+  killed: boolean;
+  reason: string;
+  actor: string;
+  updatedAt: string;
+}
+
+export interface KillTriggerInfo {
+  actor: string;
+  reason: string;
+}
+
+export type KillTriggerListener = (info: KillTriggerInfo) => void | Promise<void>;
+
+export class KillSwitchEngagedError extends Error {
+  constructor(public readonly reason: string) {
+    super(`Kill switch engaged: ${reason || 'emergency stop'}. Owner must reset it before Jarvis acts.`);
+    this.name = 'KillSwitchEngagedError';
+  }
+}
 
 export interface AuditLogEntry {
   _id?: string;
@@ -16,12 +42,22 @@ export class KillSwitch {
   private killed = false;
   private killReason = '';
   private auditCollection: Collection<AuditLogEntry>;
+  private stateCollection: Collection<KillSwitchStateDoc>;
+  private listeners = new Set<KillTriggerListener>();
 
   constructor(
     private store: DocumentStore,
     private sessionManager?: SessionManager
   ) {
     this.auditCollection = this.store.getCollection<AuditLogEntry>('audit_log');
+    this.stateCollection = this.store.getCollection<KillSwitchStateDoc>(KILL_SWITCH_STATE_COLLECTION);
+    // Loaded synchronously so a restart (nodemon, auto-pull) cannot silently re-arm Jarvis.
+    const persisted = this.stateCollection.findOne({ id: KILL_SWITCH_STATE_ID });
+    if (persisted?.killed) {
+      this.killed = true;
+      this.killReason = persisted.reason;
+      logger.warn(`[KillSwitch] Restored engaged state from the document store: ${persisted.reason}`);
+    }
     KillSwitch.instance = this;
   }
 
@@ -37,13 +73,52 @@ export class KillSwitch {
     return this.killReason;
   }
 
+  /** Throws `KillSwitchEngagedError` while engaged; call before any state-changing or model-driven work. */
+  assertNotKilled(): void {
+    if (this.killed) {
+      throw new KillSwitchEngagedError(this.killReason);
+    }
+  }
+
+  /** Subscribers halt in-flight work (abort controllers, approval requests, SSE streams). Returns an unsubscribe function. */
+  onTrigger(listener: KillTriggerListener): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
   async trigger(actor: string, reason = 'Emergency stop triggered'): Promise<{ tasksAborted: number }> {
     this.killed = true;
     this.killReason = reason;
+    this.persist(true, reason, actor);
+
+    const pending: Array<Promise<void>> = [];
+    for (const listener of this.listeners) {
+      try {
+        const out = listener({ actor, reason });
+        if (out instanceof Promise) {
+          pending.push(out);
+        }
+      } catch (err) {
+        logger.error(`[KillSwitch] Trigger listener threw: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
 
     let tasksAborted = 0;
     if (this.sessionManager) {
-      tasksAborted = await this.sessionManager.cancelAllActiveTasks(reason);
+      try {
+        tasksAborted = await this.sessionManager.cancelAllActiveTasks(reason);
+      } catch (err) {
+        logger.error(`[KillSwitch] Cancelling active tasks failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    const settled = await Promise.allSettled(pending);
+    for (const outcome of settled) {
+      if (outcome.status === 'rejected') {
+        logger.error(`[KillSwitch] Trigger listener rejected: ${outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason)}`);
+      }
     }
 
     await this.logAudit({
@@ -55,9 +130,24 @@ export class KillSwitch {
     return { tasksAborted };
   }
 
+  private persist(killed: boolean, reason: string, actor: string): void {
+    try {
+      this.stateCollection.insertOne({
+        id: KILL_SWITCH_STATE_ID,
+        killed,
+        reason,
+        actor,
+        updatedAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      logger.error(`[KillSwitch] Could not persist kill switch state: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   async reset(actor: string): Promise<void> {
     this.killed = false;
     this.killReason = '';
+    this.persist(false, '', actor);
 
     await this.logAudit({
       eventType: 'KILL_SWITCH_RESET',

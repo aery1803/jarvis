@@ -6,11 +6,19 @@
 import { z } from 'zod';
 import dotenv from 'dotenv';
 import path from 'node:path';
-import os from 'node:os';
 import { loadExternalSettings } from './security/credentials.js';
 import { parseAllowedIps } from './web/access.js';
 
 dotenv.config();
+
+const BYTES_PER_GIB = 1024 * 1024 * 1024;
+
+export interface McpServerConfig {
+  name: string;
+  command: string;
+  args: string[];
+  env?: Record<string, string>;
+}
 
 const ConfigSchema = z.object({
   repoOwner: z.string().default('aery1803'),
@@ -19,51 +27,130 @@ const ConfigSchema = z.object({
   projectId: z.string().default('PVT_kwHOBShJEs4Bm-d2'),
   pollingIntervalMs: z.number().int().default(45_000),
   pacingDelayMs: z.number().int().default(500),
-  minFreeMemoryBytes: z.number().int().default(4 * 1024 * 1024 * 1024), // 4 GB default safe baseline for devagent actions
+  minFreeMemoryBytes: z.number().int().default(4 * BYTES_PER_GIB),
+  /** Same threshold as `minFreeMemoryBytes`, in GiB, for callers that budget in whole numbers. */
+  minHostFreeGb: z.number().default(4),
   databasePath: z.string().default(path.join(process.cwd(), 'data', 'devagent.db')),
   logLevel: z.enum(['DEBUG', 'INFO', 'WARN', 'ERROR']).default('INFO'),
   ollamaBaseUrl: z.string().default('http://127.0.0.1:11434'),
   llamaServerBaseUrl: z.string().default('http://127.0.0.1:8080'),
+  searxngBaseUrl: z.string().default('http://127.0.0.1:8080'),
+  /** Resident baseline model; every default or fallback model name in the runtime comes from here. */
+  defaultModel: z.string().min(1).default('qwen3:8b'),
+  /** Token budget handed to the context builder for a chat turn. */
+  contextTokens: z.number().int().min(1).default(16_384),
+  /** Direct web search when SearXNG is unreachable; off unless the owner opts in. */
+  searchLiveFallback: z.boolean().default(false),
+  /** Tier 2: pulling a missing model downloads gigabytes, so it is never implicit. */
+  allowModelPull: z.boolean().default(false),
+  mcpServers: z.array(z.any()).default([]),
   webHost: z.string().default('127.0.0.1'),
   webAllowedIps: z.array(z.string()).default([]),
+  /** Extra browser origins (for example `http://jarvis.lan:3000`) allowed to make state-changing requests. */
+  webAllowedOrigins: z.array(z.string()).default([]),
 });
 
-/** Environment variables win over `%USERPROFILE%\.jarvis\settings.env`. */
-function setting(key: string): string | undefined {
-  return process.env[key] ?? loadExternalSettings()[key];
+export type JarvisConfig = Omit<z.infer<typeof ConfigSchema>, 'mcpServers'> & { mcpServers: McpServerConfig[] };
+
+/** Environment variables win over `%USERPROFILE%\.jarvis\settings.env`; an empty value counts as unset. */
+export function readSetting(key: string): string | undefined {
+  const fromEnv = process.env[key];
+  if (fromEnv !== undefined && fromEnv.trim() !== '') return fromEnv.trim();
+  const fromFile = loadExternalSettings()[key];
+  return fromFile !== undefined && fromFile.trim() !== '' ? fromFile.trim() : undefined;
 }
 
-export type JarvisConfig = z.infer<typeof ConfigSchema>;
+function numberSetting(key: string, fallback: number, options: { integer?: boolean; min?: number } = {}): number {
+  const raw = readSetting(key);
+  if (raw === undefined) return fallback;
+  const value = options.integer ? Number.parseInt(raw, 10) : Number.parseFloat(raw);
+  if (!Number.isFinite(value) || (options.min !== undefined && value < options.min)) {
+    process.emitWarning(`${key}="${raw}" is not a valid number${options.min !== undefined ? ` >= ${options.min}` : ''}; using ${fallback}.`);
+    return fallback;
+  }
+  return value;
+}
 
-function resolveMinFreeMemory(): number {
-  if (process.env.JARVIS_MIN_FREE_RAM_GB) {
-    return Math.round(Number.parseFloat(process.env.JARVIS_MIN_FREE_RAM_GB) * 1024 * 1024 * 1024);
+function booleanSetting(key: string, fallback: boolean): boolean {
+  const raw = readSetting(key)?.toLowerCase();
+  if (raw === undefined) return fallback;
+  if (['1', 'true', 'yes', 'on'].includes(raw)) return true;
+  if (['0', 'false', 'no', 'off'].includes(raw)) return false;
+  process.emitWarning(`${key}="${raw}" is not a boolean; using ${fallback}.`);
+  return fallback;
+}
+
+function listSetting(key: string): string[] {
+  return (readSetting(key) ?? '')
+    .split(/[,\s]+/)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+function resolveMinHostFreeGb(): number {
+  const gbKey = ['JARVIS_MIN_HOST_FREE_GB', 'JARVIS_MIN_FREE_RAM_GB'].find((key) => readSetting(key) !== undefined);
+  if (gbKey) return numberSetting(gbKey, 4, { min: 0 });
+  return numberSetting('JARVIS_MIN_FREE_RAM', 4 * BYTES_PER_GIB, { integer: true, min: 0 }) / BYTES_PER_GIB;
+}
+
+function parseMcpServer(entry: unknown, index: number): McpServerConfig {
+  const candidate = entry as Partial<McpServerConfig> | null;
+  if (!candidate || typeof candidate.name !== 'string' || !candidate.name || typeof candidate.command !== 'string' || !candidate.command) {
+    throw new Error(`entry ${index} needs a non-empty "name" and "command"`);
   }
-  if (process.env.JARVIS_MIN_FREE_RAM) {
-    return Number.parseInt(process.env.JARVIS_MIN_FREE_RAM, 10);
+  const args = candidate.args ?? [];
+  if (!Array.isArray(args) || args.some((arg) => typeof arg !== 'string')) {
+    throw new Error(`entry ${index} "args" must be an array of strings`);
   }
-  return 4 * 1024 * 1024 * 1024;
+  const env = candidate.env;
+  if (env !== undefined && (typeof env !== 'object' || env === null || Object.values(env).some((value) => typeof value !== 'string'))) {
+    throw new Error(`entry ${index} "env" must map names to strings`);
+  }
+  return { name: candidate.name, command: candidate.command, args, ...(env ? { env } : {}) };
+}
+
+/** `JARVIS_MCP_SERVERS` is a JSON array of `{ name, command, args?, env? }`; a malformed value disables MCP rather than the process. */
+function resolveMcpServers(): McpServerConfig[] {
+  const raw = readSetting('JARVIS_MCP_SERVERS');
+  if (raw === undefined) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) throw new Error('expected a JSON array');
+    return parsed.map(parseMcpServer);
+  } catch (err: unknown) {
+    process.emitWarning(`JARVIS_MCP_SERVERS ignored: ${err instanceof Error ? err.message : String(err)}`);
+    return [];
+  }
 }
 
 export function loadConfig(overrides: Partial<JarvisConfig> = {}): JarvisConfig {
-  const parsed = ConfigSchema.parse({
-    repoOwner: process.env.JARVIS_REPO_OWNER ?? 'aery1803',
-    repoName: process.env.JARVIS_REPO_NAME ?? 'jarvis',
-    projectNumber: process.env.JARVIS_PROJECT_NUMBER ? Number.parseInt(process.env.JARVIS_PROJECT_NUMBER, 10) : 2,
-    projectId: process.env.JARVIS_PROJECT_ID ?? 'PVT_kwHOBShJEs4Bm-d2',
-    pollingIntervalMs: process.env.JARVIS_POLL_INTERVAL ? Number.parseInt(process.env.JARVIS_POLL_INTERVAL, 10) : 45_000,
-    pacingDelayMs: process.env.JARVIS_PACING_MS ? Number.parseInt(process.env.JARVIS_PACING_MS, 10) : 500,
-    minFreeMemoryBytes: resolveMinFreeMemory(),
-    databasePath: process.env.JARVIS_DB_PATH ?? path.join(process.cwd(), 'data', 'devagent.db'),
-    logLevel: (process.env.JARVIS_LOG_LEVEL as any) ?? 'INFO',
-    ollamaBaseUrl: process.env.JARVIS_OLLAMA_URL ?? 'http://127.0.0.1:11434',
-    llamaServerBaseUrl: process.env.JARVIS_LLAMA_URL ?? 'http://127.0.0.1:8080',
-    webHost: setting('JARVIS_WEB_HOST') ?? '127.0.0.1',
-    webAllowedIps: parseAllowedIps(setting('JARVIS_WEB_ALLOWED_IPS')),
+  const minHostFreeGb = resolveMinHostFreeGb();
+  const logLevel = (readSetting('JARVIS_LOG_LEVEL') ?? 'INFO').toUpperCase();
+
+  return ConfigSchema.parse({
+    repoOwner: readSetting('JARVIS_REPO_OWNER') ?? 'aery1803',
+    repoName: readSetting('JARVIS_REPO_NAME') ?? 'jarvis',
+    projectNumber: numberSetting('JARVIS_PROJECT_NUMBER', 2, { integer: true }),
+    projectId: readSetting('JARVIS_PROJECT_ID') ?? 'PVT_kwHOBShJEs4Bm-d2',
+    pollingIntervalMs: numberSetting('JARVIS_POLL_INTERVAL', 45_000, { integer: true, min: 1 }),
+    pacingDelayMs: numberSetting('JARVIS_PACING_MS', 500, { integer: true, min: 0 }),
+    minFreeMemoryBytes: Math.round(minHostFreeGb * BYTES_PER_GIB),
+    minHostFreeGb,
+    databasePath: readSetting('JARVIS_DB_PATH') ?? path.join(process.cwd(), 'data', 'devagent.db'),
+    logLevel: ['DEBUG', 'INFO', 'WARN', 'ERROR'].includes(logLevel) ? logLevel : 'INFO',
+    ollamaBaseUrl: readSetting('JARVIS_OLLAMA_URL') ?? 'http://127.0.0.1:11434',
+    llamaServerBaseUrl: readSetting('JARVIS_LLAMA_URL') ?? 'http://127.0.0.1:8080',
+    searxngBaseUrl: readSetting('JARVIS_SEARXNG_URL') ?? 'http://127.0.0.1:8080',
+    defaultModel: readSetting('JARVIS_DEFAULT_MODEL') ?? 'qwen3:8b',
+    contextTokens: numberSetting('JARVIS_CONTEXT_TOKENS', 16_384, { integer: true, min: 1 }),
+    searchLiveFallback: booleanSetting('JARVIS_SEARCH_LIVE_FALLBACK', false),
+    allowModelPull: booleanSetting('JARVIS_ALLOW_MODEL_PULL', false),
+    mcpServers: resolveMcpServers(),
+    webHost: readSetting('JARVIS_WEB_HOST') ?? '127.0.0.1',
+    webAllowedIps: parseAllowedIps(readSetting('JARVIS_WEB_ALLOWED_IPS')),
+    webAllowedOrigins: listSetting('JARVIS_WEB_ALLOWED_ORIGINS'),
     ...overrides,
   });
-
-  return parsed;
 }
 
 export const config = loadConfig();

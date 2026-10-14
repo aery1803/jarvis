@@ -1,181 +1,333 @@
 /**
- * Jarvis Local AI: Dynamic Model Provisioner & Task Dispatcher
+ * Jarvis Local AI: Model Provisioner & Task Dispatcher
  * Authority: Initial Concept Document (PHASE_0_SPEC.md & jarvis-master-context.md)
- * 
+ *
  * Rules:
- * 1. Default Baseline: Always run resident 7B parameter models (qwen2.5:7b / qwen2.5-coder:7b)
- *    which have complete access to memory, tools, filesystem, devagent, and system stats.
- * 2. Precision Escalation: For precise work, complex multi-file engineering, mathematical proofs,
- *    or heavy architecture, escalate to the 30B/32B-class model (qwen2.5-coder:32b).
- * 3. On-Demand Auto-Pull: Auto-downloads missing models on-demand, executes, and returns.
+ * 1. Default baseline: the resident qwen3:8b, which has complete access to memory, tools and system stats.
+ * 2. Precision escalation: heavy engineering, proofs and architecture escalate to the 30B+ installed models.
+ * 3. Only installed models are chosen. Downloading a multi-GB model is Tier 2 (CODING_RULES section 5): it
+ *    happens only when the caller opts in with `allowPull` and `confirmPull` answers yes for that model.
  */
 
 import type { LLMProvider } from '../services/provider.js';
 import { logger } from '../utils/logger.js';
+import { CapabilityChecker } from './capability.js';
+import { MemoryGovernor } from './governor.js';
+import { KIMI_REGISTRY_ID, GIB, canonicalizeTag, matchesWord, parseParameterBillions, type InstalledModelInfo } from './lanes.js';
+import { ModelRegistry, type ModelDefinition, type ModelLane } from './registry.js';
+import { CascadeRouter } from './router.js';
+import { getSharedVramProbe } from './vram.js';
+
+export type TaskCategory = 'precision' | 'code' | 'reasoning' | 'chat' | 'vision';
+
+export const NEMOTRON_REGISTRY_ID = 'rnogy/Nvidia_Llama-3_3-Nemotron-Super-49B-v1_5:q4_K_M';
 
 export interface ProvisionRequest {
   prompt: string;
   taskType?: 'chat' | 'code' | 'reasoning' | 'precision' | 'vision' | 'embedding' | 'auto';
+  /** The owner's UI or Telegram choice. Honoured without reclassifying the prompt. */
+  explicitModel?: string;
+  /** Pulling is Tier 2: it needs this flag AND a `confirmPull` that answers true for the specific model. */
+  allowPull?: boolean;
+  /** `sizeBytes` is 0 when the size is unknown. */
+  confirmPull?: (modelId: string, sizeBytes: number) => Promise<boolean>;
   onProgress?: (message: string) => Promise<void> | void;
 }
 
 export interface ProvisionDecision {
+  /** The tag to hand to Ollama. Empty string when `canRun` is false. */
   targetModel: string;
-  category: 'precision' | 'code' | 'reasoning' | 'chat' | 'vision';
+  category: TaskCategory;
   is30BClass: boolean;
   wasInstalledOnDemand: boolean;
   rationale: string;
+  lane: ModelLane;
+  /** True when the model that runs is not the one that was wanted. */
+  isFallback: boolean;
+  /** False when nothing installed can run; the caller must tell the owner `reason` instead of chatting. */
+  canRun: boolean;
+  reason?: string;
+  requestedModel?: string;
+}
+
+export interface Classification {
+  /** Registry id wanted for the task; empty for the vision lane, where the installed vision model is resolved at dispatch. */
+  model: string;
+  category: TaskCategory;
+  lane: ModelLane;
+  is30BClass: boolean;
+  rationale: string;
+}
+
+export interface ProvisionerOptions {
+  registry?: ModelRegistry;
+  capabilityChecker?: CapabilityChecker;
+  governor?: MemoryGovernor;
+  /** Free VRAM in bytes, null when unknown. Defaults to a cached `probeGpu()` when the provisioner owns its checker. */
+  getVramFreeBytes?: () => Promise<number | null>;
+  /** Installed models with sizes. Defaults to names from `provider.listModels()`, which carry no sizes. */
+  listInstalled?: () => Promise<InstalledModelInfo[]>;
+}
+
+const KIMI_WORDS = /\b(kimi|linear attention|1m context|million tokens|massive document|book analysis)\b/i;
+const NEMOTRON_WORDS = /\b(nemotron|49b)\b/i;
+const DEEPSEEK_WORDS = /\b(deepseek(?:[-\s]?r1)?|deep math|rigorous proof|symbolic logic|formal proof|complex deduction)\b/i;
+const PRECISION_WORDS = /\b(precise|precision|30b|32b|full architecture|system blueprint|heavy refactor|multi-file|production grade)\b/i;
+const MID_REASONING_WORDS = /\b(analyze|compare|evaluate|deduce|strategy|synthesis|deep analysis)\b/i;
+const CODE_WORDS = /\b(code|coding|script|scripts|function|def|python|typescript|javascript|powershell|bash|sql|bug|debug|fix|refactor|rewrite|tests?|implement|database|endpoints?|git)\b/i;
+const VISION_WORDS = ['image', 'images', 'photo', 'photos', 'picture', 'pictures', 'screenshot', 'screenshots', 'diagram', 'diagrams', 'ocr'];
+
+function categoryFor(lane: ModelLane): TaskCategory {
+  if (lane === 'code') return 'code';
+  if (lane === 'vision') return 'vision';
+  if (lane === 'deep') return 'precision';
+  if (lane === 'balanced') return 'reasoning';
+  return 'chat';
 }
 
 export class ModelProvisioner {
-  constructor(private provider: LLMProvider) {}
+  private registry: ModelRegistry;
+  private governor: MemoryGovernor;
+  private router: CascadeRouter;
+  private getVram: (() => Promise<number | null>) | null;
+
+  constructor(
+    private provider: LLMProvider,
+    private options: ProvisionerOptions = {},
+  ) {
+    this.registry = options.registry ?? new ModelRegistry();
+    // Unknown VRAM must not turn the host-RAM comparison (wrong pool for this box) into a hard refusal.
+    this.governor =
+      options.governor ??
+      new MemoryGovernor({
+        capabilityChecker: options.capabilityChecker ?? new CapabilityChecker({ unknownVramPolicy: 'allow' }),
+        pacingDelayMs: 0,
+      });
+    this.router = new CascadeRouter(this.registry, this.governor);
+    const ownsChecker = !options.capabilityChecker && !options.governor;
+    this.getVram = options.getVramFreeBytes ?? (ownsChecker ? getSharedVramProbe() : null);
+  }
+
+  getRegistry(): ModelRegistry {
+    return this.registry;
+  }
 
   /**
-   * Determine the best specialized model for the given task prompt.
-   * Default baseline: Always run Qwen 3 8B model which has full access to memory, tools, and system state.
-   * Escalate to 32B/49B/70B only for precise/heavy analytical and architecture work.
+   * Pure prompt classification. `model` is the registry id wanted for the task (it may not be installed).
+   * Default baseline is qwen3:8b; 14B/27B/32B/49B/70B only for explicitly analytical, precise or flagship work.
    */
-  classifyTask(prompt: string, explicitType?: string): { model: string; category: 'precision' | 'code' | 'reasoning' | 'chat' | 'vision'; is30BClass: boolean; rationale: string } {
+  classifyTask(prompt: string, explicitType?: string): Classification {
     const lower = prompt.toLowerCase();
 
-    // 0. Extreme Long Context & Linear Attention -> Kimi Linear 48B-A3B (1M Context)
-    const kimiRegex = /\b(kimi|linear attention|1m context|million tokens|massive document|book analysis)\b/i;
-    if (explicitType === 'kimi' || explicitType === 'linear' || kimiRegex.test(lower)) {
+    if (explicitType === 'kimi' || explicitType === 'linear' || KIMI_WORDS.test(lower)) {
       return {
-        model: 'kimi-linear-48b-a3b:instruct',
+        model: KIMI_REGISTRY_ID,
         category: 'reasoning',
+        lane: 'deep',
         is30BClass: true,
         rationale: 'Kimi Linear 48B-A3B with 1M context window and fast 3B active linear attention.',
       };
     }
 
-    // 0b. Flagship Deep Reasoning & Math -> DeepSeek R1 70B or Nemotron 49B
-    const deepReasoningRegex = /\b(deepseek|r1|70b|nemotron|49b|deep math|rigorous proof|symbolic logic|formal proof|complex deduction)\b/i;
-    if (explicitType === 'deepseek' || explicitType === '70b' || explicitType === 'nemotron' || deepReasoningRegex.test(lower)) {
+    if (explicitType === 'nemotron' || explicitType === '49b' || NEMOTRON_WORDS.test(lower)) {
+      return {
+        model: NEMOTRON_REGISTRY_ID,
+        category: 'reasoning',
+        lane: 'deep',
+        is30BClass: true,
+        rationale: 'Nemotron Super 49B reasoning model with 128k context.',
+      };
+    }
+
+    if (explicitType === 'deepseek' || explicitType === '70b' || DEEPSEEK_WORDS.test(lower)) {
       return {
         model: 'deepseek-r1:70b',
         category: 'reasoning',
+        lane: 'deep',
         is30BClass: true,
         rationale: 'Flagship 70B deep reasoning model with chain-of-thought verification.',
       };
     }
 
-    // 1. Precision & Heavy Engineering Work -> 30B/32B-Class Model (Qwen 3 32B)
-    const precisionRegex = /\b(precise|precision|30b|32b|full architecture|system blueprint|heavy refactor|multi-file|production grade)\b/i;
-    if (explicitType === 'precision' || explicitType === '30b' || explicitType === '32b' || precisionRegex.test(lower)) {
+    if (explicitType === 'precision' || explicitType === '30b' || explicitType === '32b' || PRECISION_WORDS.test(lower)) {
       return {
         model: 'qwen3:32b',
         category: 'precision',
+        lane: 'deep',
         is30BClass: true,
         rationale: 'Heavy 32B-class precision model for complex architecture and multi-file engineering.',
       };
     }
 
-    // 2. Mid-Tier Analytical Reasoning -> Qwen 3 14B or Qwen 3.8 27B
-    const midReasoningRegex = /\b(analyze|compare|evaluate|deduce|strategy|synthesis|deep analysis)\b/i;
-    if (explicitType === 'reasoning' || midReasoningRegex.test(lower)) {
+    if (explicitType === 'reasoning' || MID_REASONING_WORDS.test(lower)) {
       return {
         model: 'qwen3:14b',
         category: 'reasoning',
+        lane: 'balanced',
         is30BClass: false,
         rationale: 'High-intelligence 14B reasoning model for analytical synthesis.',
       };
     }
 
-    // 3. Standard Code / Script Tasks -> Resident Qwen 3 8B
-    const codeRegex = /\b(code|coding|script|scripts|function|def|python|typescript|javascript|powershell|bash|sql|bug|debug|fix|refactor|rewrite|tests?|implement|database|endpoints?|git)\b/i;
-    if (explicitType === 'code' || codeRegex.test(lower)) {
+    if (explicitType === 'code' || CODE_WORDS.test(lower)) {
       return {
         model: 'qwen3:8b',
         category: 'code',
+        lane: 'code',
         is30BClass: false,
         rationale: 'Resident Qwen 3 8B coding engine with full tool and filesystem access.',
       };
     }
 
-    // 4. Vision / Image
-    const visionKeywords = ['image', 'photo', 'picture', 'screenshot', 'diagram', 'ocr'];
-    if (explicitType === 'vision' || visionKeywords.some((k) => lower.includes(k))) {
+    if (explicitType === 'vision' || matchesWord(lower, VISION_WORDS)) {
       return {
-        model: 'llava:7b',
+        model: '',
         category: 'vision',
+        lane: 'vision',
         is30BClass: false,
         rationale: 'Vision-language model for multimodal image understanding.',
       };
     }
 
-    // 5. Default Always-Running Resident Model: Qwen 3 8B (Starting Model with Access to Everything)
     return {
       model: 'qwen3:8b',
       category: 'chat',
+      lane: 'resident',
       is30BClass: false,
       rationale: 'Resident Qwen 3 8B starting orchestrator model with full access to memory, tools, and system state.',
     };
   }
 
+  private classifyExplicit(modelId: string): Classification {
+    const def = this.registry.getModel(modelId);
+    const lane = def?.lane ?? 'balanced';
+    const billions = parseParameterBillions(def?.parameterSize ?? modelId) ?? 0;
+    return {
+      model: def?.id ?? modelId,
+      category: categoryFor(lane),
+      lane,
+      is30BClass: billions >= 30,
+      rationale: `Explicitly selected ${def?.name ?? modelId}.`,
+    };
+  }
+
+  private async refreshInstalled(): Promise<void> {
+    try {
+      const list = this.options.listInstalled
+        ? await this.options.listInstalled()
+        : this.provider.listModels
+          ? (await this.provider.listModels()).map((name) => ({ name }))
+          : null;
+      if (list) this.registry.reconcileInstalled(list);
+    } catch (err: unknown) {
+      logger.warn(`[ModelProvisioner] Could not read installed models: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  private unavailable(classification: Classification, reason: string, requested?: string): ProvisionDecision {
+    return {
+      targetModel: '',
+      category: classification.category,
+      is30BClass: classification.is30BClass,
+      wasInstalledOnDemand: false,
+      rationale: `${classification.rationale} Cannot run: ${reason}`,
+      lane: classification.lane,
+      isFallback: false,
+      canRun: false,
+      reason,
+      requestedModel: requested,
+    };
+  }
+
   /**
-   * Resolves the target model, verifies installation in Ollama, and auto-pulls on-demand if missing.
+   * Resolves the target model among INSTALLED models and points the provider at it. Never downloads without
+   * `allowPull` plus an affirmative `confirmPull`; otherwise it falls back to the best installed model that fits
+   * and says so in `rationale`.
    */
   async ensureAndDispatch(request: ProvisionRequest): Promise<ProvisionDecision> {
-    const classification = this.classifyTask(request.prompt, request.taskType);
-    const targetModel = classification.model;
-
-    // Check installed models
-    const installedModels = this.provider.listModels ? await this.provider.listModels() : [];
-    const isInstalled = installedModels.some((m) => m === targetModel || m.startsWith(`${targetModel}:`));
-
-    if (isInstalled) {
-      if (this.provider.setModel) {
-        this.provider.setModel(targetModel);
-      }
-      return {
-        targetModel,
-        category: classification.category,
-        is30BClass: classification.is30BClass,
-        wasInstalledOnDemand: false,
-        rationale: `${classification.rationale} (Already installed).`,
-      };
+    await this.refreshInstalled();
+    if (this.getVram) {
+      this.governor.getChecker().setVramFree(await this.getVram().catch(() => null));
     }
 
-    // If not installed, trigger on-demand auto-pull
-    if (this.provider.pullModel) {
-      logger.info(`[ModelProvisioner] Target model ${targetModel} not found. Triggering on-demand auto-pull...`);
-      const pullLabel = classification.is30BClass
-        ? `📥 *Precision work detected:* Escalating to 30B-class model (\`${targetModel}\`) from concept doc.\nAuto-downloading to Radeon 8060S GPU (fits in 46.5 GB Vulkan pool)...`
-        : `📥 *Specialized model needed:* \`${targetModel}\` for ${classification.category} task.\nAuto-downloading on-demand to your Radeon 8060S GPU...`;
+    let classification = request.explicitModel ? this.classifyExplicit(request.explicitModel) : this.classifyTask(request.prompt, request.taskType);
+    const notes: string[] = [];
+    let wanted = classification.model;
 
-      await request.onProgress?.(pullLabel);
+    if (classification.lane === 'vision' && wanted === '') {
+      const vision = this.registry.getInstalledPrimaryForLane('vision');
+      if (vision && this.registry.isInstalled(vision.id)) {
+        wanted = vision.id;
+      } else if (request.taskType === 'vision') {
+        return this.unavailable(classification, 'no vision model is installed.');
+      } else {
+        notes.push('No vision model is installed, so this text model cannot see images.');
+        classification = this.classifyTask('', undefined);
+        wanted = classification.model;
+      }
+    }
 
-      const pullSuccess = await this.provider.pullModel(targetModel);
-      if (pullSuccess) {
-        if (this.provider.setModel) {
-          this.provider.setModel(targetModel);
+    const wantedDef = this.registry.getModel(wanted);
+    const missing = this.registry.hasInstalledInfo() && !this.registry.isInstalled(wanted);
+    let installedOnDemand = false;
+
+    if (missing) {
+      const sizeBytes = wantedDef?.diskSizeBytes ?? wantedDef?.memoryRequirementBytes ?? 0;
+      const sizeLabel = sizeBytes > 0 ? `${(sizeBytes / GIB).toFixed(1)} GB` : 'unknown size';
+      const pullable = canonicalizeTag(wanted) !== KIMI_REGISTRY_ID;
+      if (!pullable) {
+        notes.push(`${wanted} is not installed and has no Ollama library tag; install it with the fleet downloader.`);
+      } else if (request.allowPull && request.confirmPull && this.provider.pullModel) {
+        const approved = await request.confirmPull(wanted, sizeBytes);
+        if (approved) {
+          logger.info(`[ModelProvisioner] Pulling ${wanted} with owner approval (${sizeLabel}).`);
+          await request.onProgress?.(`Downloading \`${wanted}\` (${sizeLabel}) with your approval. This can take a while.`);
+          const pulled = await this.provider.pullModel(wanted);
+          if (pulled) {
+            this.registry.markInstalled(wanted, wantedDef?.diskSizeBytes ?? null);
+            installedOnDemand = true;
+            await request.onProgress?.(`Model installed: \`${wanted}\`.`);
+          } else {
+            notes.push(`Downloading ${wanted} failed.`);
+          }
+        } else {
+          notes.push(`${wanted} (${sizeLabel}) is not installed and downloading was not approved.`);
         }
-        await request.onProgress?.(`✅ *Model installed successfully:* \`${targetModel}\`. Executing precise task now...`);
-        return {
-          targetModel,
-          category: classification.category,
-          is30BClass: classification.is30BClass,
-          wasInstalledOnDemand: true,
-          rationale: `${classification.rationale} (Installed on-demand).`,
-        };
+      } else {
+        notes.push(`${wanted} (${sizeLabel}) is not installed; downloading is a Tier 2 action that needs your approval, so an installed model is used instead.`);
       }
     }
 
-    // Fallback: If 30B pull fails or not ready, fallback to resident 7B coder/reasoner
-    const fallback = classification.category === 'code' || classification.category === 'precision'
-      ? 'qwen2.5-coder:7b'
-      : 'qwen2.5:7b';
+    const route = await this.router.route({
+      prompt: request.prompt,
+      taskType: request.taskType === 'precision' || request.taskType === 'vision' || request.taskType === 'auto' ? undefined : request.taskType,
+      preferredModel: wanted || undefined,
+      preferredLane: classification.lane,
+    });
 
-    if (this.provider.setModel) {
-      this.provider.setModel(fallback);
+    if (!route.canRun || !route.chosenModel) {
+      return this.unavailable(classification, route.reason ?? route.rationale, wanted || undefined);
     }
+
+    const chosen: ModelDefinition = route.chosenModel;
+    const sameAsWanted = wanted !== '' && canonicalizeTag(chosen.id) === canonicalizeTag(wanted);
+    const targetModel = this.registry.getInstalledTag(chosen.id) ?? chosen.id;
+    this.provider.setModel?.(targetModel);
+
+    const rationale = sameAsWanted
+      ? [...notes, `${classification.rationale}${installedOnDemand ? ' (Installed on-demand with approval).' : this.registry.hasInstalledInfo() ? ' (Already installed).' : ''}`].join(' ')
+      : `${[...notes, route.rationale].join(' ')} Using ${chosen.name} instead of ${wanted || 'a vision model'}.`;
+
     return {
-      targetModel: fallback,
+      targetModel,
       category: classification.category,
-      is30BClass: false,
-      wasInstalledOnDemand: false,
-      rationale: `${classification.rationale} (Fallback to resident 7B ${fallback}).`,
+      is30BClass: sameAsWanted ? classification.is30BClass : (parseParameterBillions(chosen.parameterSize) ?? 0) >= 30,
+      wasInstalledOnDemand: installedOnDemand && sameAsWanted,
+      rationale,
+      lane: route.lane,
+      isFallback: !sameAsWanted,
+      canRun: true,
+      requestedModel: wanted || undefined,
     };
   }
 }

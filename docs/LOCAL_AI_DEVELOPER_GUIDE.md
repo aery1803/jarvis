@@ -43,7 +43,7 @@ flowchart LR
   1. Create a dedicated feature branch: `git checkout -b feature/<feat-name>`.
   2. Practice **Test-Driven Development (TDD)**: write unit tests in `tests/<name>.test.ts` first.
   3. Implement code in `src/`.
-  4. Run `npm test` and verify a **100% pass rate**.
+  4. Run `pnpm test` and verify a **100% pass rate**.
   5. Update [`jarvis-master-context.md`](file:///c:/Users/aery1/Files/Projects/jarvis/jarvis-master-context.md) version header and roadmap table.
   6. Commit changes locally with standard semantic commits (`feat(...)`, `fix(...)`).
 
@@ -121,13 +121,13 @@ Any data received from the outside world (web pages, SearXNG, scraped HTML, emai
 
 | Command | Purpose |
 |---|---|
-| `npm run devagent` | Runs a single polling cycle of GitHub Project Board #2 |
-| `npm run devagent:watch` | Runs the Dev Agent as an active background watcher |
-| `npm run web` | Launches the Claude/Gemini-style Local Web Chat UI on `http://localhost:3000` |
-| `npm run telegram` | Starts the Telegram Bot daemon (`@aery_jarvis_dev_bot`) |
-| `npm run research` | Runs the interactive multi-source web research CLI |
-| `npm test` | Runs all 101+ unit tests across the entire codebase |
-| `npm run preflight` | Executes hardware, VRAM, and secrets hygiene checks |
+| `pnpm run devagent` | Runs a single polling cycle of GitHub Project Board #2 |
+| `pnpm run devagent:watch` | Runs the Dev Agent as an active background watcher |
+| `pnpm run web` | Launches the Claude/Gemini-style Local Web Chat UI on `http://localhost:3000` |
+| `pnpm run telegram` | Starts the Telegram Bot daemon (`@aery_jarvis_dev_bot`) |
+| `pnpm run research` | Runs the interactive multi-source web research CLI |
+| `pnpm test` | Runs the whole automated test suite |
+| `pnpm run preflight` | Executes hardware, VRAM, and secrets hygiene checks |
 | `powershell -ExecutionPolicy Bypass -File scripts/release.ps1` | Runs the full release verification pipeline |
 
 ---

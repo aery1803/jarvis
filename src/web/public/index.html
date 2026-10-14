@@ -22,8 +22,7 @@
       <div class="sidebar-section">
         <label for="modelSelect" class="section-label">Model Lane</label>
         <select id="modelSelect" class="model-select">
-          <option value="qwen2.5:7b">qwen2.5:7b (Reasoning Lane)</option>
-          <option value="qwen2.5-coder:7b">qwen2.5-coder:7b (Code Lane)</option>
+          <option value="" disabled selected>Loading models...</option>
         </select>
       </div>
 
@@ -35,8 +34,8 @@
         </label>
       </div>
 
-      <div class="sidebar-section" style="padding-top: 4px; padding-bottom: 8px;">
-        <button id="benchmarkBtn" class="benchmark-btn" style="width: 100%; padding: 8px 12px; background: #1e293b; color: #38bdf8; border: 1px solid #38bdf844; border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-weight: 500; display: flex; align-items: center; justify-content: center; gap: 6px; transition: all 0.2s ease;">
+      <div class="sidebar-section">
+        <button id="benchmarkBtn" class="benchmark-btn">
           <span>⚡</span>
           <span id="benchmarkBtnText">Benchmark Model</span>
         </button>
@@ -49,18 +48,19 @@
 
       <div class="sidebar-footer">
         <div class="status-indicator">
-          <span class="status-dot"></span>
-          <span class="status-text" id="statusText">Host RAM Headroom: OK</span>
+          <span class="status-dot is-unknown" id="statusDot"></span>
+          <span class="status-text" id="statusText">Checking status...</span>
         </div>
       </div>
     </aside>
 
     <!-- Main Chat Workspace -->
     <main class="chat-workspace">
+      <div class="kill-banner" id="killBanner" role="alert" hidden></div>
       <header class="chat-header">
         <div class="header-info">
           <h2 id="currentChatTitle">New Conversation</h2>
-          <span class="current-model-tag" id="currentModelTag">qwen2.5:7b</span>
+          <span class="current-model-tag" id="currentModelTag"></span>
         </div>
       </header>
 
@@ -100,7 +100,7 @@
           </button>
         </form>
         <div class="input-footer">
-          <span>Private & Local • Running on Radeon 8060S Vulkan Engine • Zero Cloud Telemetry</span>
+          <span>Private & Local • Local inference via Ollama • Zero Cloud Telemetry</span>
         </div>
       </div>
     </main>

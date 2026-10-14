@@ -1,4 +1,9 @@
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+const gh = (args) => execFileSync('gh', args, { encoding: 'utf8' });
 
 const features = [
   {
@@ -181,38 +186,35 @@ const featureOptionId = '46ad078d';
 async function main() {
   for (const feat of features) {
     console.log(`\n=== Processing ${feat.tag} ===`);
+    let tmpDir;
     try {
       // 1. Create Issue
-      const fs = require('fs');
-      const tmpBody = require('path').join(__dirname, 'tmp_body.md');
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-board-'));
+      const tmpBody = path.join(tmpDir, 'body.md');
       fs.writeFileSync(tmpBody, feat.body, 'utf8');
 
-      const createCmd = `gh issue create --repo aery1803/jarvis --title "${feat.title}" --body-file "${tmpBody}" --label "ai-proposed,owner-approved"`;
-      const issueUrl = execSync(createCmd, { encoding: 'utf8' }).trim();
+      const issueUrl = gh(['issue', 'create', '--repo', 'aery1803/jarvis', '--title', feat.title, '--body-file', tmpBody, '--label', 'ai-proposed,owner-approved']).trim();
       console.log(`Issue created: ${issueUrl}`);
 
       // 2. Add to Project 2
-      const addCmd = `gh project item-add 2 --owner aery1803 --url "${issueUrl}" --format json`;
-      const itemRaw = execSync(addCmd, { encoding: 'utf8' });
+      const itemRaw = gh(['project', 'item-add', '2', '--owner', 'aery1803', '--url', issueUrl, '--format', 'json']);
       const itemId = JSON.parse(itemRaw).id;
       console.log(`Added to Project 2 (Item ID: ${itemId})`);
 
       // 3. Set Status to Done
-      const editStatusCmd = `gh project item-edit --id ${itemId} --project-id ${projectId} --field-id ${statusFieldId} --single-select-option-id ${doneOptionId}`;
-      execSync(editStatusCmd, { encoding: 'utf8' });
+      gh(['project', 'item-edit', '--id', itemId, '--project-id', projectId, '--field-id', statusFieldId, '--single-select-option-id', doneOptionId]);
 
       // 4. Set Ticket Type to Feature
-      const editTypeCmd = `gh project item-edit --id ${itemId} --project-id ${projectId} --field-id ${typeFieldId} --single-select-option-id ${featureOptionId}`;
-      execSync(editTypeCmd, { encoding: 'utf8' });
+      gh(['project', 'item-edit', '--id', itemId, '--project-id', projectId, '--field-id', typeFieldId, '--single-select-option-id', featureOptionId]);
 
       // 5. Close Issue
       const issueNum = issueUrl.split('/').pop();
-      execSync(`gh issue close ${issueNum} --repo aery1803/jarvis`, { encoding: 'utf8' });
+      gh(['issue', 'close', issueNum, '--repo', 'aery1803/jarvis']);
       console.log(`Closed issue #${issueNum} as Done.`);
-
-      if (fs.existsSync(tmpBody)) fs.unlinkSync(tmpBody);
     } catch (err) {
       console.error(`Error processing ${feat.tag}:`, err.message);
+    } finally {
+      if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   }
   console.log('\nAll post-FEAT-009 features successfully logged to Project Board #2!');

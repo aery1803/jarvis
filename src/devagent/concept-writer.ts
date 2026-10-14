@@ -14,31 +14,41 @@ export interface PullRequestTemplateOptions {
   breakingChanges?: string;
 }
 
+const SAFE_ACTION_ID = /^[a-zA-Z0-9_.-]+$/;
+
+/** Model-written text must not be able to smuggle in HTML comments such as a forged loopback marker. */
+function neutralize(text: string): string {
+  return text.replace(/<!--/g, '&lt;!--').replace(/-->/g, '--&gt;');
+}
+
 export class ConceptWriter {
   /**
    * Formats the standardized AI Concept Analysis comment.
    */
   public formatConceptComment(issueNumber: number, plan: ConceptPlan, actionId: string): string {
+    if (!SAFE_ACTION_ID.test(actionId)) {
+      throw new Error(`Invalid action id for loopback marker: '${actionId}'`);
+    }
     const storiesList = plan.proposedStories
       .map((story) => {
-        const criteria = story.criteria.map((c) => `    - [ ] ${c}`).join('\n');
-        return `  - **${story.title}:**\n${criteria}`;
+        const criteria = story.criteria.map((c) => `    - [ ] ${neutralize(c)}`).join('\n');
+        return `  - **${neutralize(story.title)}:**\n${criteria}`;
       })
       .join('\n');
 
-    const risksList = plan.risksAndLimitations.map((r) => `  - ${r}`).join('\n');
+    const risksList = plan.risksAndLimitations.map((r) => `  - ${neutralize(r)}`).join('\n');
 
     const questionsList = plan.questions
       .map((q) => {
-        const opts = q.options.join(', ');
-        return `  ${q.id}. **${q.question}**\n     - Options: ${opts}\n     - *(Recommendation)*: **${q.recommendation}**`;
+        const opts = neutralize(q.options.join(', '));
+        return `  ${q.id}. **${neutralize(q.question)}**\n     - Options: ${opts}\n     - *(Recommendation)*: **${neutralize(q.recommendation)}**`;
       })
       .join('\n');
 
     return `## 🤖 Jarvis Dev Agent: Concept Analysis & Architecture Plan
 
 ### 1. Understanding & Context
-${plan.understanding}
+${neutralize(plan.understanding)}
 
 ### 2. Proposed Story Breakdown
 ${storiesList}
@@ -58,10 +68,10 @@ ${questionsList}
    * Formats the Pull Request description matching docs/rules/CODING_RULES.md.
    */
   public formatPullRequestBody(options: PullRequestTemplateOptions): string {
-    const criteriaList = options.acceptanceCriteria.map((c) => `- [x] ${c}`).join('\n');
+    const criteriaList = options.acceptanceCriteria.map((c) => `- [x] ${neutralize(c)}`).join('\n');
 
     return `## Summary of Changes
-${options.summary}
+${neutralize(options.summary)}
 
 Closes #${options.issueNumber}
 
@@ -69,7 +79,7 @@ Closes #${options.issueNumber}
 ${criteriaList}
 
 ## Verification & Test Results
-${options.testsReport}
+${neutralize(options.testsReport)}
 
 ## Security & Architecture Checklist
 - [x] Zero-secrets hygiene: no credentials or tokens committed.

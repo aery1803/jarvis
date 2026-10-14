@@ -7,6 +7,7 @@ import { MemoryManager } from '../memory/manager.js';
 import { SessionManager } from '../sessions/manager.js';
 import { KillSwitch } from '../security/kill-switch.js';
 import { OllamaProvider } from '../services/provider.js';
+import { config } from '../config.js';
 
 async function main(): Promise<void> {
   console.log('[Jarvis Telegram Service] Bootstrapping Phase 2 Bot...');
@@ -34,7 +35,7 @@ async function main(): Promise<void> {
   const sessionManager = new SessionManager(store);
   const memoryManager = new MemoryManager(store);
   const killSwitch = new KillSwitch(store, sessionManager);
-  const llmProvider = new OllamaProvider({ model: 'qwen2.5:7b' });
+  const llmProvider = new OllamaProvider({ baseUrl: config.ollamaBaseUrl, model: config.defaultModel });
 
   const bot = new TelegramBotClient({
     token,

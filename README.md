@@ -52,19 +52,19 @@ To stop everything, simply press **Ctrl + C** in your terminal.
 ### 1. The Local Web Chat (Like Claude or ChatGPT, but on your machine!)
 1. Run `pnpm start` (or `pnpm dev` for auto-reloading).
 2. Open [`http://localhost:3000`](http://localhost:3000) in Chrome, Edge, or Brave.
-3. Pick your model:
-   - 💻 **`qwen2.5-coder:7b` (Code Lane):** Heavyweight coding brain for complete scripts, bug fixes, and testing.
-   - 🧠 **`qwen2.5:7b` (Reasoning Lane):** Deep thinker for big questions, essays, and analysis.
-4. Type anything you want! The **Web Research** toggle will automatically fact-check your questions on the web and show you source links.
+3. Pick your model from the dropdown. It lists whatever Ollama has installed (with size), and starts on the resident baseline `qwen3:8b` (`JARVIS_DEFAULT_MODEL`). If Ollama is not running, the dropdown says so instead of showing a made-up list.
+4. Type anything you want! The **Web Research** toggle decides whether the question goes to your local SearXNG for sources: on means it searches, off means it never touches the internet. If the model cannot answer, you get an error message and your prompt back in the box, never an invented reply.
+
+The sidebar footer shows host RAM (the Windows partition, about 31.65 GB) and, when the GPU probe works, the separate GPU pool (about 48 GiB Vulkan) where model weights live. A red banner appears if the kill switch is engaged.
 
 ### 2. Chat on Telegram from Your Phone
 1. Open Telegram on your phone or PC.
 2. Search for your bot: **`@aery_jarvis_dev_bot`**.
 3. Send any of these commands:
    - `/help` — Shows the cheat sheet of what Jarvis can do.
-   - `/status` — Shows laptop battery, memory, and temperature.
+   - `/status` — Shows host name, free and total memory, the 14 GB headroom check, and whether the kill switch is armed.
    - `/models` — Lists all the smart AI models installed.
-   - `/model qwen2.5-coder:7b` — Switches to the code-writing model!
+   - `/model <name>` — Switches to another installed model (for example `qwen3:32b`).
    - `/ensemble [on|off|<query>]` — Runs multiple models simultaneously, corroborating candidate answers!
    - `/benchmark [model]` — Tests reasoning, coding, and speed, giving a real scorecard!
    - `/research <topic>` — Conducts a deep internet investigation and gives you a summary with sources.
@@ -113,7 +113,7 @@ If you ever want to run just one specific piece of Jarvis:
 | `pnpm run telegram` | Starts only the Telegram Bot daemon |
 | `pnpm run research` | Runs the deep research terminal tool |
 | `pnpm run devagent:watch` | Starts the autonomous pair-programming watcher on GitHub |
-| `pnpm test` | Runs all 113 automated tests across 32 suites (takes ~5 seconds) |
+| `pnpm test` | Runs the whole automated test suite |
 | `pnpm run build` | Compiles all TypeScript code into production JavaScript |
 | `pnpm run benchmark:eval` | Runs intelligence benchmark on installed models (Score, Grade, t/s) |
 | `pnpm run searxng` | Starts your local private search engine in Docker |
@@ -124,10 +124,35 @@ If you ever want to run just one specific piece of Jarvis:
 ## 💻 Workstation Profile
 - **Laptop:** ASUS ROG Flow Z13 (`GZ302EA`)
 - **Processor:** AMD Ryzen AI Max+ 395 (16 Cores, 32 Threads)
-- **Graphics & AI Engine:** AMD Radeon 8060S (46.5 GB dedicated Vulkan VRAM)
-- **RAM:** 64 GB LPDDR5X Unified Memory
+- **Graphics & AI Engine:** AMD Radeon 8060S (about 48 GiB Vulkan pool; 47.8 GiB reported by `llama-cli --list-devices`)
+- **RAM:** 64 GB LPDDR5X unified memory, split at boot: Windows and Node see about 31.65 GB, the rest is the GPU pool that model weights load into (see `/api/diagnostics`)
 - **Operating System:** Windows 11 Home 26H2 (Build 26300)
 - **Local AI Engine:** Ollama & `llama.cpp` (Vulkan acceleration)
+
+---
+
+## ⚙️ Settings
+
+Every setting is read from the environment first, then from `%USERPROFILE%\.jarvis\settings.env` (`KEY=value` lines, never committed). Secrets such as tokens live in Windows Credential Manager, not here.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `JARVIS_DEFAULT_MODEL` | `qwen3:8b` | Resident baseline model used when a request names none |
+| `JARVIS_OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama endpoint |
+| `JARVIS_SEARXNG_URL` | `http://127.0.0.1:8080` | SearXNG endpoint |
+| `JARVIS_SEARCH_LIVE_FALLBACK` | `false` | Allow a direct web search when SearXNG is down |
+| `JARVIS_ALLOW_MODEL_PULL` | `false` | Allow automatic model downloads (Tier 2) |
+| `JARVIS_CONTEXT_TOKENS` | `16384` | Token budget for a chat turn |
+| `JARVIS_MIN_HOST_FREE_GB` | `4` | Minimum free host RAM before heavy actions |
+| `JARVIS_MCP_SERVERS` | none | JSON array of `{ "name", "command", "args", "env" }` |
+| `JARVIS_WEB_HOST` | `127.0.0.1` | Web UI bind address |
+| `JARVIS_WEB_ALLOWED_IPS` | none | LAN client IPs or IPv4 CIDR ranges (for example `192.168.1.0/24`); required to bind beyond loopback, bad entries stop startup |
+| `JARVIS_WEB_ALLOWED_ORIGINS` | none | Extra browser origins allowed to make changes |
+| `PORT` | `3000` | Web UI port |
+
+The web API sends no CORS headers. Changes (POST, DELETE) must come from the bundled UI, which adds `X-Jarvis-Client: web`; other callers must send that header too. Benchmarks are `POST /api/benchmark` only, one at a time.
+
+The SearXNG container reads its secret from `SEARXNG_SECRET`; set it in your shell or a git-ignored `.env` file next to `docker-compose.yml` before `pnpm run searxng`.
 
 ---
 

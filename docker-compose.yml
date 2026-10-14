@@ -9,6 +9,7 @@ services:
       - ./searxng:/etc/searxng:ro
     environment:
       - SEARXNG_BASE_URL=http://localhost:8080/
+      - SEARXNG_SECRET=${SEARXNG_SECRET:?set SEARXNG_SECRET to a long random string}
     cap_drop:
       - ALL
     cap_add:

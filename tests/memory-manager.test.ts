@@ -1,6 +1,7 @@
 import { test, describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { DocumentStore } from '../src/storage/collection.js';
 import { MemoryManager } from '../src/memory/manager.js';
@@ -10,16 +11,21 @@ describe('MemoryManager & Crypto', () => {
   const testDbPath = path.resolve(process.cwd(), 'data', 'test-memory.db');
   let store: DocumentStore;
   let memory: MemoryManager;
+  let keyDir: string;
+  let vault: { keyPath: string; env: NodeJS.ProcessEnv };
 
   beforeEach(() => {
     if (fs.existsSync(testDbPath)) {
       fs.unlinkSync(testDbPath);
     }
+    keyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-memory-'));
+    vault = { keyPath: path.join(keyDir, 'vault.key'), env: {} };
     store = new DocumentStore(testDbPath);
-    memory = new MemoryManager(store);
+    memory = new MemoryManager(store, { vault });
   });
 
   afterEach(() => {
+    fs.rmSync(keyDir, { recursive: true, force: true });
     store.close();
     if (fs.existsSync(testDbPath)) {
       fs.unlinkSync(testDbPath);
@@ -28,14 +34,14 @@ describe('MemoryManager & Crypto', () => {
 
   test('should encrypt and decrypt sensitive strings with AES-256-GCM', () => {
     const secret = 'super-secret-api-token-998877';
-    const encrypted = encryptSensitive(secret);
+    const encrypted = encryptSensitive(secret, vault);
 
     assert.ok(encrypted.ciphertext);
     assert.ok(encrypted.iv);
     assert.ok(encrypted.authTag);
     assert.notEqual(encrypted.ciphertext, secret);
 
-    const decrypted = decryptSensitive(encrypted);
+    const decrypted = decryptSensitive(encrypted, vault);
     assert.equal(decrypted, secret);
   });
 

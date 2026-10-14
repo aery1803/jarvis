@@ -8,7 +8,7 @@ import { SearXNGClient } from '../services/searxng.js';
 import { ContentDistiller } from '../services/scraper.js';
 import { ConsensusEngine } from '../services/consensus.js';
 import { CognitionEngine } from '../agents/cognition.js';
-import { OllamaProvider, MockLLMProvider } from '../services/provider.js';
+import { OllamaProvider } from '../services/provider.js';
 import { DocumentStore } from '../storage/collection.js';
 import { logger } from '../utils/logger.js';
 import { config } from '../config.js';
@@ -32,8 +32,9 @@ export async function runResearch(query: string): Promise<ResearchSessionDoc> {
 
   // 2. Metasearch via SearXNG
   const searchClient = new SearXNGClient({
-    baseUrl: process.env.JARVIS_SEARXNG_URL ?? 'http://127.0.0.1:8080',
-    enableFallback: true,
+    baseUrl: config.searxngBaseUrl,
+    enableFallback: config.searchLiveFallback,
+    enableLiveFallback: config.searchLiveFallback,
   });
 
   const searchResults = await searchClient.search(query, { maxResults: 3 });
@@ -66,9 +67,9 @@ export async function runResearch(query: string): Promise<ResearchSessionDoc> {
   logger.info(`[ResearchCLI] Consensus Score: ${consensusReport.overallScore} (${consensusReport.summary})`);
 
   // 5. Synthesize with Local LLM
-  let provider = new OllamaProvider({
+  const provider = new OllamaProvider({
     baseUrl: config.ollamaBaseUrl,
-    model: 'qwen2.5:7b',
+    model: config.defaultModel,
   });
 
   let synthesis = '';
@@ -76,17 +77,14 @@ export async function runResearch(query: string): Promise<ResearchSessionDoc> {
     taskType: 'research',
     researchFacts: distilledSources.map((s, i) => `[Source ${i + 1}] (${s.url}):\n${s.content}`).join('\n\n'),
     consensusScore: consensusReport.overallScore,
-    activeModel: 'qwen2.5:7b',
+    activeModel: config.defaultModel,
   });
 
   try {
     synthesis = await provider.generate(prompt, { maxTokens: 512 });
-  } catch (err: any) {
-    logger.warn(`[ResearchCLI] Local Ollama generate unavailable (${err.message}). Using local synthesis engine.`);
-    const mock = new MockLLMProvider({
-      cannedResponse: `Based on corroborated sources for "${query}", the architecture delivers high performance with verified memory headroom and multi-source confidence score of ${consensusReport.overallScore}.`,
-    });
-    synthesis = await mock.generate(prompt);
+  } catch (err: unknown) {
+    store.close();
+    throw new Error(`Local model ${config.defaultModel} could not synthesize an answer: ${err instanceof Error ? err.message : String(err)}`);
   }
 
   // 6. Save in MongoDB-style Collection

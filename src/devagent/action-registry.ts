@@ -10,7 +10,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
-import type { OwnActionRecord } from './types.js';
+import type { ActionStatus, OwnActionRecord } from './types.js';
 
 export const AI_COMMENT_MARKER_REGEX = /<!--\s*jarvis-devagent:action-id:([a-zA-Z0-9_.-]+)\s*-->/i;
 
@@ -40,6 +40,15 @@ export class OwnActionRegistry {
       );
       CREATE INDEX IF NOT EXISTS idx_own_actions_target ON own_actions(target_id);
     `);
+
+    // Databases created before status tracking lack these columns; `CREATE TABLE IF NOT EXISTS` leaves them as-is.
+    const columns = (this.db.prepare(`PRAGMA table_info(own_actions)`).all() as Array<{ name: string }>).map((c) => c.name);
+    if (!columns.includes('status')) {
+      this.db.exec(`ALTER TABLE own_actions ADD COLUMN status TEXT`);
+    }
+    if (!columns.includes('outcome')) {
+      this.db.exec(`ALTER TABLE own_actions ADD COLUMN outcome TEXT`);
+    }
   }
 
   /**
@@ -47,8 +56,8 @@ export class OwnActionRegistry {
    */
   public recordAction(action: OwnActionRecord): void {
     const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO own_actions (id, action_type, target_id, signature, created_at, metadata)
-      VALUES (?, ?, ?, ?, ?, ?)
+      INSERT OR REPLACE INTO own_actions (id, action_type, target_id, signature, created_at, metadata, status, outcome)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     stmt.run(
@@ -57,8 +66,20 @@ export class OwnActionRegistry {
       action.targetId,
       action.signature ?? null,
       action.createdAt,
-      action.metadata ?? null
+      action.metadata ?? null,
+      action.status ?? null,
+      action.outcome ?? null
     );
+  }
+
+  /**
+   * Updates the status/outcome of an already-recorded action. Returns false when the id is unknown.
+   */
+  public updateAction(id: string, update: { status: ActionStatus; outcome?: string }): boolean {
+    const result = this.db
+      .prepare(`UPDATE own_actions SET status = ?, outcome = ? WHERE id = ?`)
+      .run(update.status, update.outcome ?? null, id);
+    return Number(result.changes) > 0;
   }
 
   /**
@@ -75,7 +96,7 @@ export class OwnActionRegistry {
   /**
    * Inspects a comment to determine if it originated from the Dev Agent.
    * Checks both:
-   * 1. Embedded invisible marker: <!-- jarvis-devagent:action-id:<id> -->
+   * 1. Embedded invisible marker: <!-- jarvis-devagent:action-id:<id> --> whose id is recorded
    * 2. Direct comment ID lookup in the own_actions table.
    */
   public isOwnComment(commentBody: string, commentId?: string): boolean {
@@ -83,12 +104,9 @@ export class OwnActionRegistry {
       return true;
     }
 
+    // A marker only counts when its id was minted by the gateway: anyone can type the marker text into a comment.
     const match = commentBody.match(AI_COMMENT_MARKER_REGEX);
-    if (match && match[1]) {
-      return true;
-    }
-
-    return false;
+    return Boolean(match && match[1] && this.isOwnAction(match[1]));
   }
 
   /**
@@ -96,9 +114,9 @@ export class OwnActionRegistry {
    */
   public getAllActions(): OwnActionRecord[] {
     const stmt = this.db.prepare(`
-      SELECT id, action_type as actionType, target_id as targetId, signature, created_at as createdAt, metadata
+      SELECT id, action_type as actionType, target_id as targetId, signature, created_at as createdAt, metadata, status, outcome
       FROM own_actions
-      ORDER BY created_at ASC
+      ORDER BY created_at ASC, rowid ASC
     `);
 
     const rows = stmt.all() as any[];
@@ -109,6 +127,8 @@ export class OwnActionRegistry {
       signature: r.signature ?? undefined,
       createdAt: r.createdAt,
       metadata: r.metadata ?? undefined,
+      status: r.status ?? undefined,
+      outcome: r.outcome ?? undefined,
     }));
   }
 

@@ -4,7 +4,7 @@
  */
 
 import path from 'node:path';
-import { JarvisWebServer } from '../web/server.js';
+import { JarvisWebServer, installProcessGuard } from '../web/server.js';
 import { DocumentStore } from '../storage/collection.js';
 import { SessionManager } from '../sessions/manager.js';
 import { DEFAULT_CHAT_USER_ID } from '../storage/chat-store.js';
@@ -12,7 +12,8 @@ import { migrateLegacyChatDb } from '../storage/chat-migration.js';
 import { getTelegramOwnerId } from '../security/credentials.js';
 import { logger } from '../utils/logger.js';
 
-const port = process.env.PORT ? Number.parseInt(process.env.PORT, 10) : 3000;
+const parsedPort = Number.parseInt(process.env.PORT ?? '', 10);
+const port = Number.isInteger(parsedPort) && parsedPort >= 0 && parsedPort < 65536 ? parsedPort : 3000;
 // Same store and owner ID as `start-all.ts`, so sessions are shared with Telegram whichever launcher runs.
 const dataDir = path.resolve(process.cwd(), 'data');
 const store = new DocumentStore(path.join(dataDir, 'jarvis.db'));
@@ -21,6 +22,7 @@ const userId = getTelegramOwnerId() || DEFAULT_CHAT_USER_ID;
 const server = new JarvisWebServer({ port, sessionManager, userId });
 
 async function main() {
+  installProcessGuard();
   console.log('\n======================================================');
   console.log('       JARVIS LOCAL AI AGENT - WEB WORKSTATION        ');
   console.log('======================================================\n');

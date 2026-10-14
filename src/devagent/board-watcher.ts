@@ -3,10 +3,11 @@
  * Authority: Section 17.10 (Automation mechanism and security)
  */
 
-import { execSync } from 'node:child_process';
 import type { OwnActionRegistry } from './action-registry.js';
 import type { ActionGateway } from './action-gateway.js';
 import type { ProjectBoardItem, TicketDirective, ProjectColumn, TicketType } from './types.js';
+import { runCommand } from './command-runner.js';
+import type { CommandRunner } from './command-runner.js';
 import { logger } from '../utils/logger.js';
 import { config } from '../config.js';
 
@@ -41,19 +42,24 @@ export interface BoardWatcherDeps {
   gateway: ActionGateway;
   projectNumber?: number;
   repoOwner?: string;
+  run?: CommandRunner;
 }
+
+const GITHUB_OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 
 export class BoardWatcher {
   private registry: OwnActionRegistry;
   private gateway: ActionGateway;
   private projectNumber: number;
   private repoOwner: string;
+  private run: CommandRunner;
 
   constructor(deps: BoardWatcherDeps) {
     this.registry = deps.registry;
     this.gateway = deps.gateway;
     this.projectNumber = deps.projectNumber ?? config.projectNumber;
     this.repoOwner = deps.repoOwner ?? config.repoOwner;
+    this.run = deps.run ?? runCommand;
   }
 
   /**
@@ -90,21 +96,29 @@ export class BoardWatcher {
   }
 
   /**
-   * Polls the GitHub Project Board using the gh CLI.
+   * Polls the GitHub Project Board using the gh CLI. A read, recorded as BOARD_POLL so it never looks like a card mutation.
    */
   public async pollBoard(): Promise<ProjectBoardItem[]> {
+    if (!Number.isInteger(this.projectNumber) || this.projectNumber <= 0) {
+      throw new Error(`Invalid project number: ${String(this.projectNumber)}`);
+    }
+    if (!GITHUB_OWNER.test(this.repoOwner)) {
+      throw new Error(`Invalid repository owner: '${this.repoOwner}'`);
+    }
+
     return this.gateway.executeAction(
       {
         tier: 1,
-        actionType: 'CARD_MOVE', // Polling read is wrapped safely in Tier 1
+        actionType: 'BOARD_POLL',
         targetId: `board-${this.projectNumber}`,
         description: `Poll Project Board #${this.projectNumber}`,
       },
       async () => {
         try {
-          const stdout = execSync(
-            `gh project item-list ${this.projectNumber} --owner ${this.repoOwner} --format json`,
-            { encoding: 'utf-8', timeout: 15_000 }
+          const { stdout } = await this.run(
+            'gh',
+            ['project', 'item-list', String(this.projectNumber), '--owner', this.repoOwner, '--format', 'json'],
+            { timeoutMs: 15_000 }
           );
           const raw = JSON.parse(stdout);
           const items = this.parseProjectItems(raw);
