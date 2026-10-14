@@ -241,6 +241,10 @@ export class TelegramBotClient {
 
     const userId = senderId?.toString() ?? 'owner';
 
+    if (!this.ownerId) {
+      console.log(`[Jarvis Telegram Service] Incoming message from user ID ${senderId} (@${msg.from?.username ?? 'anonymous'}). Set TELEGRAM_OWNER_ID=${senderId} in settings.env to lock access.`);
+    }
+
     // Route slash commands
     if (text.startsWith('/')) {
       await this.handleCommand(chatId, userId, text);
@@ -263,6 +267,7 @@ export class TelegramBotClient {
           `*Jarvis Local AI Assistant (Phase 2)*\n\n` +
             `*Available Commands:*\n` +
             `- \`/status\` - Workstation specs, free memory & state\n` +
+            `- \`/id\` - Show your numeric Telegram User ID\n` +
             `- \`/new <name>\` - Start a new isolated workspace session\n` +
             `- \`/sessions\` - List recent conversation sessions\n` +
             `- \`/switch <id>\` - Switch active session\n` +
@@ -273,6 +278,17 @@ export class TelegramBotClient {
             `Send any message to chat directly.`
         );
         break;
+
+      case '/id':
+      case '/myid': {
+        await this.sendMessage(
+          chatId,
+          `*Your Telegram User ID:* \`${userId}\`\n\n` +
+            `To restrict Jarvis strictly to your account, add this line to \`%USERPROFILE%\\.jarvis\\settings.env\`:\n` +
+            `\`TELEGRAM_OWNER_ID=${userId}\``
+        );
+        break;
+      }
 
       case '/status': {
         const freeRamGb = (os.freemem() / (1024 * 1024 * 1024)).toFixed(2);
