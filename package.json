@@ -5,6 +5,8 @@
   "description": "Jarvis Local AI Agent - Autonomous personal assistant on ASUS ROG Flow Z13",
   "type": "module",
   "scripts": {
+    "start": "tsx src/cli/start-all.ts",
+    "start:all": "tsx src/cli/start-all.ts",
     "build": "tsc",
     "test": "tsx --test tests/**/*.test.ts",
     "devagent": "tsx src/devagent/cli.ts",
