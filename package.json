@@ -9,6 +9,7 @@
     "test": "tsx --test tests/**/*.test.ts",
     "devagent": "tsx src/devagent/cli.ts",
     "devagent:watch": "tsx src/devagent/cli.ts --watch",
+    "research": "tsx src/cli/research.ts",
     "preflight": "powershell -ExecutionPolicy Bypass -File scripts/preflight.ps1",
     "benchmark": "powershell -ExecutionPolicy Bypass -File scripts/benchmark.ps1"
   },
