@@ -53,6 +53,7 @@ To stop everything, simply press **Ctrl + C** in your terminal.
    - `/status` — Shows laptop battery, memory, and temperature.
    - `/models` — Lists all the smart AI models installed.
    - `/model qwen2.5-coder:1.5b` — Switches to the code-writing model!
+   - `/benchmark [model]` — Tests reasoning, coding, and speed, giving a real scorecard!
    - `/research <topic>` — Conducts a deep internet investigation and gives you a summary with sources.
    - `/kill` — Emergency stop button that halts all background tasks.
 
@@ -99,6 +100,7 @@ If you ever want to run just one specific piece of Jarvis:
 | `npm run devagent:watch` | Starts the autonomous pair-programming watcher on GitHub |
 | `npm test` | Runs all 104 automated tests (takes ~5 seconds) |
 | `npm run build` | Compiles all TypeScript code into production JavaScript |
+| `npm run benchmark:eval` | Runs intelligence benchmark on installed models (Score, Grade, t/s) |
 | `npm run searxng` | Starts your local private search engine in Docker |
 | `npm run preflight` | Checks that your GPU, VRAM, and RAM have enough breathing room |
 

@@ -16,6 +16,7 @@
     "telegram": "tsx src/cli/telegram.ts",
     "preflight": "powershell -ExecutionPolicy Bypass -File scripts/preflight.ps1",
     "benchmark": "powershell -ExecutionPolicy Bypass -File scripts/benchmark.ps1",
+    "benchmark:eval": "tsx src/eval/cli.ts",
     "searxng": "docker compose up -d searxng",
     "searxng:down": "docker compose down"
   },

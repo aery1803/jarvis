@@ -368,6 +368,79 @@ async function loadModels() {
   }
 }
 
+// Benchmark Button Handler
+const benchmarkBtn = document.getElementById('benchmarkBtn');
+const benchmarkBtnText = document.getElementById('benchmarkBtnText');
+
+if (benchmarkBtn) {
+  benchmarkBtn.addEventListener('click', async () => {
+    const selectedModel = modelSelect.value || 'qwen2.5:7b';
+    if (!currentSessionId) {
+      await createNewSession('Model Benchmark Report');
+    }
+
+    benchmarkBtn.disabled = true;
+    if (benchmarkBtnText) benchmarkBtnText.textContent = 'Testing Model...';
+
+    // Add user message indicating benchmark started
+    appendMessage({
+      role: 'user',
+      content: `Run comprehensive intelligence benchmark on model: ${selectedModel}`,
+    });
+
+    // Create assistant message container for results
+    const assistantDiv = document.createElement('div');
+    assistantDiv.className = 'message assistant-message';
+    assistantDiv.innerHTML = `
+      <div class="message-sender">⚡ Jarvis Intelligence Engine</div>
+      <div class="message-content">⏳ <em>Running standardized benchmark across Reasoning, Coding, Tool Calling, and Retrieval...</em></div>
+    `;
+    messagesContainer.appendChild(assistantDiv);
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+
+    try {
+      const res = await fetch('/api/benchmark', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: selectedModel }),
+      });
+      const card = await res.json();
+
+      const contentDiv = assistantDiv.querySelector('.message-content');
+      let catHtml = '';
+      for (const [, c] of Object.entries(card.categories || {})) {
+        const cat = c;
+        catHtml += `<div>• <strong>${cat.category.toUpperCase()}</strong>: ${cat.percentage}% (${cat.passed}/${cat.total}) — avg ${cat.avgLatencyMs}ms</div>`;
+      }
+
+      contentDiv.innerHTML = `
+        <div style="background: #1e293b; border-radius: 8px; padding: 14px; border: 1px solid #38bdf855;">
+          <h3 style="color: #38bdf8; margin-top: 0; margin-bottom: 8px;">📊 Model Benchmark Scorecard</h3>
+          <div style="font-size: 1.1rem; font-weight: bold; margin-bottom: 8px;">
+            Model: <code style="color: #a5f3fc;">${escapeHtml(card.modelName)}</code> | Score: <span style="color: #4ade80;">${card.overallScore}%</span> (Grade: <span style="color: #facc15;">${card.grade}</span>)
+          </div>
+          <div style="color: #94a3b8; font-size: 0.9rem; margin-bottom: 12px;">
+            Estimated Throughput: ~${card.estimatedTokensPerSec} t/s | Avg Latency: ${card.avgLatencyMs}ms | Headroom: ${card.systemSpecs?.freeMemoryGB} GB free
+          </div>
+          <div style="line-height: 1.6; margin-bottom: 10px;">
+            ${catHtml}
+          </div>
+          <div style="border-top: 1px solid #334155; padding-top: 8px; font-size: 0.9rem; color: #38bdf8;">
+            🎯 Recommended Lane: <strong>${(card.recommendedLanes || []).join(', ').toUpperCase()}</strong>
+          </div>
+        </div>
+      `;
+    } catch (err) {
+      const contentDiv = assistantDiv.querySelector('.message-content');
+      if (contentDiv) contentDiv.textContent = `Benchmark failed: ${err.message}`;
+    } finally {
+      benchmarkBtn.disabled = false;
+      if (benchmarkBtnText) benchmarkBtnText.textContent = 'Benchmark Model';
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+  });
+}
+
 // Initial boot
 checkHealth();
 loadModels();

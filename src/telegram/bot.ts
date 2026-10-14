@@ -8,10 +8,13 @@ import {
 import { SessionManager } from '../sessions/manager.js';
 import { MemoryManager } from '../memory/manager.js';
 import { KillSwitch } from '../security/kill-switch.js';
-import { LLMProvider } from '../services/provider.js';
+import { LLMProvider, OllamaProvider } from '../services/provider.js';
 import { SearXNGClient } from '../services/searxng.js';
 import { ContentDistiller } from '../services/scraper.js';
 import { ConsensusEngine } from '../services/consensus.js';
+import { CognitionEngine } from '../agents/cognition.js';
+import { ModelBenchmarkSuite } from '../eval/benchmark.js';
+import { config } from '../config.js';
 
 export interface TelegramBotOptions {
   token: string;
@@ -279,6 +282,7 @@ export class TelegramBotClient {
             `- \`/id\` - Show your numeric Telegram User ID\n` +
             `- \`/models\` - List available local models\n` +
             `- \`/model <name>\` - Switch active model (e.g. qwen2.5-coder:1.5b)\n` +
+            `- \`/benchmark [model]\` - Run intelligence benchmark & report score\n` +
             `- \`/research <query>\` - Run multi-source research on any topic\n` +
             `- \`/new <name>\` - Start a new isolated workspace session\n` +
             `- \`/sessions\` - List recent conversation sessions\n` +
@@ -313,6 +317,28 @@ export class TelegramBotClient {
           await this.sendMessage(chatId, `Switched active model to: *${targetModel}*`);
         } else {
           await this.sendMessage(chatId, `Active LLM provider does not support dynamic switching.`);
+        }
+        break;
+      }
+
+      case '/benchmark': {
+        const targetModel = args[0]?.trim() || this.options.llmProvider?.getModel?.() || 'qwen2.5:7b';
+        await this.sendMessage(
+          chatId,
+          `⏳ *Starting Intelligence Benchmark for:* \`${targetModel}\`...\nEvaluating Reasoning, Coding, Tool Calling, and Retrieval. Please wait 10-20 seconds.`
+        );
+        await this.sendAction(chatId, 'typing');
+        try {
+          const suite = new ModelBenchmarkSuite();
+          let benchProvider = this.options.llmProvider;
+          if (!benchProvider || benchProvider.getModel() !== targetModel) {
+            benchProvider = new OllamaProvider({ baseUrl: config.ollamaBaseUrl, model: targetModel });
+          }
+          const card = await suite.runBenchmark(benchProvider);
+          const reportMd = ModelBenchmarkSuite.formatMarkdownReport(card);
+          await this.sendMessage(chatId, reportMd);
+        } catch (err: any) {
+          await this.sendMessage(chatId, `Benchmark failed: ${err.message}`);
         }
         break;
       }
@@ -547,8 +573,12 @@ export class TelegramBotClient {
     let responseText = '';
     if (this.options.llmProvider) {
       try {
-        const systemDirectives = 'You are Jarvis, the owner\'s autonomous local AI assistant on ASUS ROG Flow Z13. Be helpful, clear, and direct. Provide complete code and scripts when requested. Never refuse safe tasks.';
-        const fullPrompt = `${systemDirectives}\n${contextPrompt}\n${researchFacts}\nUser: ${text}\nAssistant:`;
+        const fullPrompt = CognitionEngine.formatPrompt(text, {
+          taskType: isCode ? 'code' : isQuestion ? 'research' : 'chat',
+          memoryContext: contextPrompt,
+          researchFacts,
+          activeModel: this.options.llmProvider.getModel(),
+        });
         const res = await this.options.llmProvider.generate(fullPrompt);
         responseText = typeof res === 'string' ? res : (res as any)?.text ?? String(res);
       } catch (err: any) {

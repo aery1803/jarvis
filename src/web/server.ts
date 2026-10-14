@@ -12,6 +12,8 @@ import { OllamaProvider, MockLLMProvider } from '../services/provider.js';
 import { SearXNGClient } from '../services/searxng.js';
 import { ContentDistiller } from '../services/scraper.js';
 import { ConsensusEngine } from '../services/consensus.js';
+import { CognitionEngine } from '../agents/cognition.js';
+import { ModelBenchmarkSuite } from '../eval/benchmark.js';
 import { logger } from '../utils/logger.js';
 import { config } from '../config.js';
 
@@ -130,7 +132,28 @@ export class JarvisWebServer {
         return;
       }
 
-      // 6. Streaming Chat API (SSE)
+      // 6. Benchmark API
+      if (pathname === '/api/benchmark' && (method === 'GET' || method === 'POST')) {
+        let targetModel = 'qwen2.5:7b';
+        if (method === 'POST') {
+          const body = await this.readJsonBody(req).catch(() => ({}));
+          if (body.model) targetModel = body.model;
+        } else {
+          const parsedUrl = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+          const qModel = parsedUrl.searchParams.get('model');
+          if (qModel) targetModel = qModel;
+        }
+
+        const suite = new ModelBenchmarkSuite();
+        const provider = new OllamaProvider({ baseUrl: config.ollamaBaseUrl, model: targetModel });
+        const scorecard = await suite.runBenchmark(provider);
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(scorecard));
+        return;
+      }
+
+      // 7. Streaming Chat API (SSE)
       if (pathname === '/api/chat/stream' && method === 'POST') {
         await this.handleStreamingChat(req, res);
         return;
@@ -208,8 +231,11 @@ export class JarvisWebServer {
       model: activeModel,
     });
 
-    const systemPrompt = "You are Jarvis, the owner's autonomous local AI assistant running on ASUS ROG Flow Z13. Be helpful, direct, and actionable. Provide complete solutions, scripts, and code when asked. Never give negative rejections on safe tasks.";
-    const fullPrompt = `${systemPrompt}\n${researchContext}\nUser question: ${prompt}\nAssistant:`;
+    const fullPrompt = CognitionEngine.formatPrompt(prompt, {
+      taskType: isCode ? 'code' : shouldResearch ? 'research' : 'chat',
+      researchFacts: researchContext,
+      activeModel,
+    });
     let accumulatedResponse = '';
 
     try {

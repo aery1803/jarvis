@@ -142,6 +142,185 @@ export class OllamaProvider implements LLMProvider {
   }
 }
 
+export interface GeminiProviderOptions {
+  apiKey?: string;
+  model?: string;
+}
+
+export class GeminiProvider implements LLMProvider {
+  private apiKey: string;
+  private model: string;
+
+  constructor(options: GeminiProviderOptions = {}) {
+    this.apiKey = options.apiKey ?? process.env.GEMINI_API_KEY ?? '';
+    this.model = options.model ?? 'gemini-2.0-flash';
+  }
+
+  public getModel(): string {
+    return this.model;
+  }
+
+  public getBaseUrl(): string {
+    return 'https://generativelanguage.googleapis.com';
+  }
+
+  public setModel(model: string): void {
+    this.model = model;
+    logger.info(`[GeminiProvider] Active model switched to: ${model}`);
+  }
+
+  public async listModels(): Promise<string[]> {
+    return ['gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'];
+  }
+
+  public async pullModel(_name: string): Promise<boolean> {
+    return true;
+  }
+
+  public async generate(prompt: string, options: GenerateOptions = {}): Promise<string> {
+    if (!this.apiKey) {
+      throw new Error('GEMINI_API_KEY is not configured in settings.env or environment variables.');
+    }
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: options.temperature ?? 0.7,
+          maxOutputTokens: options.maxTokens ?? 2048,
+          stopSequences: options.stop,
+        },
+      }),
+    });
+
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '');
+      throw new Error(`Gemini API error ${res.status}: ${res.statusText} - ${errBody}`);
+    }
+
+    const data = (await res.json()) as any;
+    return data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+  }
+
+  public async chat(messages: ChatMessage[], options: GenerateOptions = {}): Promise<string> {
+    if (!this.apiKey) {
+      throw new Error('GEMINI_API_KEY is not configured.');
+    }
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent?key=${this.apiKey}`;
+    const contents = messages
+      .filter((m) => m.role !== 'system')
+      .map((m) => ({
+        role: m.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: m.content }],
+      }));
+
+    const systemMsg = messages.find((m) => m.role === 'system');
+    const bodyPayload: any = {
+      contents,
+      generationConfig: {
+        temperature: options.temperature ?? 0.7,
+        maxOutputTokens: options.maxTokens ?? 2048,
+        stopSequences: options.stop,
+      },
+    };
+
+    if (systemMsg) {
+      bodyPayload.systemInstruction = {
+        parts: [{ text: systemMsg.content }],
+      };
+    }
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(bodyPayload),
+    });
+
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '');
+      throw new Error(`Gemini API error ${res.status}: ${res.statusText} - ${errBody}`);
+    }
+
+    const data = (await res.json()) as any;
+    return data.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+  }
+}
+
+export interface HybridProviderOptions {
+  localProvider?: LLMProvider;
+  cloudProvider?: LLMProvider;
+  preferCloud?: boolean;
+}
+
+export class HybridProvider implements LLMProvider {
+  private localProvider: LLMProvider;
+  private cloudProvider?: LLMProvider;
+  private preferCloud: boolean;
+
+  constructor(options: HybridProviderOptions = {}) {
+    this.localProvider = options.localProvider ?? new OllamaProvider();
+    if (options.cloudProvider) {
+      this.cloudProvider = options.cloudProvider;
+    } else if (process.env.GEMINI_API_KEY) {
+      this.cloudProvider = new GeminiProvider({ apiKey: process.env.GEMINI_API_KEY });
+    }
+    this.preferCloud = options.preferCloud ?? Boolean(process.env.GEMINI_API_KEY);
+  }
+
+  public getModel(): string {
+    return this.preferCloud && this.cloudProvider ? this.cloudProvider.getModel() : this.localProvider.getModel();
+  }
+
+  public getBaseUrl(): string {
+    return this.preferCloud && this.cloudProvider ? this.cloudProvider.getBaseUrl() : this.localProvider.getBaseUrl();
+  }
+
+  public setModel(model: string): void {
+    if (model.startsWith('gemini') && this.cloudProvider) {
+      this.preferCloud = true;
+      this.cloudProvider.setModel?.(model);
+    } else {
+      this.preferCloud = false;
+      this.localProvider.setModel?.(model);
+    }
+  }
+
+  public async listModels(): Promise<string[]> {
+    const local = this.localProvider.listModels ? await this.localProvider.listModels() : [];
+    const cloud = this.cloudProvider?.listModels ? await this.cloudProvider.listModels() : [];
+    return [...cloud, ...local];
+  }
+
+  public async pullModel(name: string): Promise<boolean> {
+    if (name.startsWith('gemini')) return true;
+    return this.localProvider.pullModel ? this.localProvider.pullModel(name) : true;
+  }
+
+  public async generate(prompt: string, options: GenerateOptions = {}): Promise<string> {
+    if (this.preferCloud && this.cloudProvider) {
+      try {
+        return await this.cloudProvider.generate(prompt, options);
+      } catch (err: any) {
+        logger.warn(`[HybridProvider] Cloud inference failed (${err.message}). Falling back to local model.`);
+      }
+    }
+    return this.localProvider.generate(prompt, options);
+  }
+
+  public async chat(messages: ChatMessage[], options: GenerateOptions = {}): Promise<string> {
+    if (this.preferCloud && this.cloudProvider) {
+      try {
+        return await this.cloudProvider.chat(messages, options);
+      } catch (err: any) {
+        logger.warn(`[HybridProvider] Cloud chat failed (${err.message}). Falling back to local model.`);
+      }
+    }
+    return this.localProvider.chat(messages, options);
+  }
+}
+
 export interface MockLLMProviderOptions {
   cannedResponse?: string;
   model?: string;
