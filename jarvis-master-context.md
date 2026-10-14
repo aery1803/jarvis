@@ -1,7 +1,7 @@
 # Jarvis Local AI Agent: Master Design and Context Document
 
-**Version:** v3.4 (Gate 0, Phase 0/0b, Phase 1 Complete; FEAT-004 Web Chat UI Implemented)
-**Status:** **IN PROGRESS - FEAT-004 CLAUDE/GEMINI WEB CHAT UI & SESSIONS.** Gate 0, Phase 0 (FEAT-001), Phase 0b (FEAT-002), and Phase 1 (FEAT-003) merged into `main` and marked `Done`. Feature FEAT-004 (Claude/Gemini-style Local Web Chat Interface & Session Storage) implemented on `http://localhost:3000` with real-time SSE streaming, collapsible sidebar chat history, dark-mode markdown/code highlighting, and MongoDB-style SQLite `ChatStore` passing 40/40 unit tests (100%).
+**Version:** v3.5 (Gate 0, Phase 0/0b, Phase 1 Complete; FEAT-004 Web Chat UI & FEAT-005 MCP Tool Registry Implemented)
+**Status:** **IN PROGRESS - FEAT-005 MCP TOOL REGISTRY & FUNCTION CALLING.** Gate 0, Phase 0 (FEAT-001), Phase 0b (FEAT-002), Phase 1 (FEAT-003), and FEAT-004 (Web Chat UI) merged into `main` and marked `Done`. Feature FEAT-005 (Tool Registry, Function Calling Executor, and Model Context Protocol Client) implemented and verified with 49/49 unit tests across 14 test suites passing (100%). Ready for PR #10 and Code Review.
 **Purpose:** The single source of truth for the Jarvis project. Holds the complete architecture, verified hardware baseline, decisions, and live Gate 0 checklist.
 
 **Labels used throughout**
@@ -1186,7 +1186,9 @@ Decision: **Claude writes everything the blueprint needs; the owner's local AI b
 |---|---|---|---|
 | 0 | Workstation and coding setup | Raise the GPU memory share; install inference backends; run the benchmark (Section 7.5); choose models; set up VS Code with local agent and autocomplete (Section 17); Docker; start the evaluation set | **DONE** (FEAT-001, PR #2 merged) |
 | 0b | Development workflow bootstrap | Git repository, protected branches, board and templates, the limited GitHub token, CI checks, and a minimal Dev Agent (board watcher, concept writer, pull request handler), built first with manual help in the editor; afterwards the AI works only through the board (Section 17.6 to 17.12) | **DONE** (FEAT-002, PR #4 merged) |
-| 1 | Core and research skill | Config, logger, provider interface, SearXNG, scraper, consensus engine, synthesis, CLI; MongoDB-style DocumentStore collection layer | **IMPLEMENTED** (FEAT-003, 32/32 tests pass) |
+| 1 | Core and research skill | Config, logger, provider interface, SearXNG, scraper, consensus engine, synthesis, CLI; MongoDB-style DocumentStore collection layer | **DONE** (FEAT-003, PR #6 merged) |
+| 1b | Web Chat UI & Sessions | Claude/Gemini-style Local Web Chat UI on http://localhost:3000, SSE streaming, SQLite ChatStore, markdown & syntax highlight | **DONE** (FEAT-004, PR #9 merged) |
+| 1c | Tool Registry & MCP Client | Model tool calling, parameter schemas, Tier-governed execution, MCP server client & tool bridge | **IMPLEMENTED** (FEAT-005, 49/49 tests pass) |
 | 2 | Memory, sessions, Telegram, safety | Memory manager and tiers, session and task manager, Telegram bot, Action Gateway, permission engine, audit log, kill switch |
 | 3 | Orchestration and quality | Model registry, capability checker, memory governor, cascade, cost ledger, evaluation harness; image understanding and OCR (Section 5.10) |
 | 4 | Email and browser | Gmail watcher with Telegram summaries and approvals; Playwright automation with logged-in profile |
