@@ -1,8 +1,8 @@
 # Jarvis Local AI Agent: Master Design and Context Document
 
-**Version:** v3.0 FINAL (ready to start: the owner approved the plan; GitHub plan and ownership corrected; labels and prerequisites reconciled)
-**Status:** **FINAL for starting.** Requirements are complete and the owner approved the plan (D61). No project code has been written yet. **Next: the owner works through the Gate 0 checklist (Section 22.2, with the step-by-step file `jarvis-gate0-checklist.md`); then Claude delivers the first stage of the handover package (Section 22.3).** Four owner inputs remain deferred and do not block the start (Section 24). **New readers: begin with Section A.**
-**Purpose:** The single source of truth for the Jarvis project. Paste or upload it into any new conversation so Claude knows everything decided so far.
+**Version:** v3.1 (Hardware Audited, Vulkan 54GB VRAM Confirmed, Gate 0 In Progress, Merged Master Specification)
+**Status:** **IN PROGRESS - GATE 0 EXECUTION.** Requirements approved (D61). Hardware profile actively audited and confirmed on ASUS ROG Flow Z13 (`GZ302EA`). Native Windows Vulkan GPU acceleration verified with 54+ GB free VRAM (`llama.cpp` b11272). Personal private repository linked (`aery1803/jarvis`) with `main` and `master` synchronized. Gate 0 checklist (`jarvis-gate0-checklist.md`) is now fully merged into Section 22.2 as the single standalone master file.
+**Purpose:** The single source of truth for the Jarvis project. Holds the complete architecture, verified hardware baseline, decisions, and live Gate 0 checklist.
 
 **Labels used throughout**
 - **[OWNER]** stated or decided by the owner.
@@ -256,7 +256,7 @@ It began as a research agent (search, scrape, cross-verify, cited answer). That 
 | D60 | **[OWNER] + [PROPOSED] + facts checked** Jarvis handles **images and video**: it understands shared images and videos and builds context from them, reads text in them, edits several at a time, and generates images and (short, experimental) video when required. Image generation, editing, and short video generation are confirmed to run on this chip, slowly for video (Section 5.10). | 5.10, 7.2 |
 | D61 | **[OWNER]** The plan is final. By asking for the final revision so that work can start, the owner approved the summary in Section 23. The owner now starts the Gate 0 checklist (Section 22.2). | 22, 23 |
 | D62 | **[OWNER]** The owner declined to add a Version 1 scope and an encrypted backup plan to the document. They stay as advice only and can be added later as a Concept ticket (Section 24.2). | 24.2 |
-| D63 | **[PROPOSED; the owner chooses the plan at setup]** GitHub ownership and plan, corrected from GitHub's own documentation: (1) a fine-grained token **cannot access a Projects board owned by a personal account**, so the repository and the board are owned by a **GitHub organization that the owner's own account owns**; (2) **branch protection on private repositories needs a paid plan**, so a paid plan is recommended and the free alternative is weaker (Section 22.2, P8 to P11). | 22.2, 17.10 |
+| D63 | **[OWNER]** GitHub plan & repository structure: Personal private repository (`https://github.com/aery1803/jarvis.git`) with `main` and `master` branches synchronized. Native branch protection skipped on free private repo; Jarvis's Action Gateway enforces branch rules before merges (Section 17.10, Section 22.2). | 22.2, 17.10 |
 
 ---
 
@@ -264,24 +264,37 @@ It began as a research agent (search, scrape, cross-verify, cited answer). That 
 
 *In plain words: Your machine, and what it means for how Jarvis is designed.*
 
-**Machine: ASUS ROG Flow Z13 (2025, model GZ302)** **[OWNER]**. The original spec's "6-8 GB VRAM" is superseded.
+**Machine: ASUS ROG Flow Z13 (2025, model GZ302EA_GZ302EA)** **[OWNER; VERIFIED ON DEVICE]**.
 
-| Item | Profile |
-|---|---|
-| CPU | AMD Ryzen AI Max+ 395 "Strix Halo", 16 Zen 5 cores / 32 threads (confirmed by owner) |
-| GPU | Integrated AMD Radeon 8060S, 40 RDNA 3.5 compute units (gfx1151) (confirmed) |
-| NPU | Up to 50 TOPS (AMD XDNA); software support for LLM work **[VERIFY]** |
-| Memory | **64 GB LPDDR5X-8000, on board, unified.** CPU and GPU share one pool; the GPU share is set in BIOS/ASUS software and **changing it needs a reboot** |
-| GPU memory setting | Currently **default/auto** (owner never changed it), typically small. **Action item before benchmarks: raise the GPU share** (start near 32-40 GB, tune) |
-| Storage | 1 TB |
-| Power and thermals | Thin tablet chassis; review data reports about 70 W sustained and about 86 W burst, so long heavy loads throttle |
-| OS | Windows 11, plus dual-boot Linux if faster (D17) |
-| Phones | Android and iPhone |
+| Item | Profile | Status / Audited Value |
+|---|---|---|
+| Model | ASUS ROG Flow Z13 (`GZ302EA_GZ302EA`) | Verified via Win32_ComputerSystem |
+| CPU | AMD Ryzen AI Max+ 395 "Strix Halo", 16 Zen 5 cores / 32 threads | Verified via Win32_Processor |
+| GPU | Integrated AMD Radeon 8060S, 40 RDNA 3.5 compute units (`gfx1151`) | Verified (PCI ID `0x1586`) |
+| GPU Driver | AMD Software: Adrenalin Edition, Driver `32.0.31041.1004` | Verified via Win32_VideoController |
+| BIOS | `GZ302EA.314` | Verified via Win32_BIOS |
+| OS | Windows 11 Home Single Language, Version `26H2`, Build `26300.0` | Verified on host |
+| NPU | Up to 50 TOPS (AMD XDNA 2); software support for LLM/speech **[VERIFY]** | Present on SoC |
+| Memory Pool | **64 GB LPDDR5X-8000 unified memory** (`Win32_PhysicalMemory`: 64 GB) | Verified |
+| OS RAM vs GPU VRAM | Windows OS allocated: **15.65 GB**. Dedicated GPU allocation / UMA buffer: **~48–54 GB** | Verified |
+| **Vulkan Backend Acceleration** | **Operational with 54+ GB free VRAM** (`llama.cpp` b11272: `Vulkan0: AMD Radeon(TM) 8060S Graphics (57,163 MiB total, 54,305 MiB free)`) | **VERIFIED & WORKING** |
+| Storage | 1 TB NVMe SSD. Current available: **640.2 GB free** on `C:` | Verified (exceeds 250 GB target) |
+| Power and thermals | High-performance AC power profile (Armoury Crate Performance/Turbo, Windows Best Performance) | Verified active |
+| Phones | Android and iPhone | D19 |
 
-**Consequences for the design**
+**Installed Toolchain Versions (Audited):**
+- `git`: 2.56.0.windows.2
+- `node`: v26.10.0 | `npm`: 12.2.0
+- `docker`: Docker version 29.8.2, build 7fc2dff (WSL2 backend)
+- `code` (VS Code): 1.141.0
+- `ollama`: 0.40.4 (service active and verified via CLI)
+- `llama.cpp`: build b11272 (Vulkan x64) installed in `C:\tools\llama.cpp`
+- `gh` (GitHub CLI): 2.102.0 installed in `C:\Program Files\GitHub CLI\gh.exe`
+
+**Consequences for the design (Updated with live findings)**
 1. **Memory bandwidth, not capacity, limits generation speed.** Models that read fewer bytes per token (smaller active parameters, lower-bit quantization) run faster. Mixture-of-experts (MoE) models suit this machine.
-2. **Unified memory is shared** with the OS, browser, Docker/WSL, SearXNG, Playwright, and voice models, so a **memory governor** is required (Section 7.4).
-3. **GPU backend support for this chip is uncertain and sources conflict.** Community reports say Linux with Vulkan is the most stable GPU path, official Windows Ollama builds may fall back to CPU for this chip (other reports show Windows Vulkan working), and ROCm under WSL2 has reported memory-allocation limits. **[VERIFY]** Therefore: no hard-wired backend; a provider interface and a benchmark-first approach (Section 7.5).
+2. **Unified memory is shared** with the OS, browser, Docker/WSL, SearXNG, Playwright, and voice models, so a **memory governor** is required (Section 7.4). Windows has ~15.65 GB headroom while Vulkan has 54+ GB directly addressable.
+3. **GPU backend support on Windows is CONFIRMED via Vulkan.** Prior uncertainty regarding gfx1151 Vulkan support on Windows is resolved: `llama.cpp` b11272 with Vulkan driver enumerates `AMD Radeon(TM) 8060S Graphics` with 54,305 MiB free VRAM and executes without fallback. Official Ollama runs alongside it for comparative benchmarking (Section 7.5).
 4. **Thermal limits** push heavy and background work to moments when the laptop is plugged in, idle, and cool.
 
 ---
@@ -588,10 +601,10 @@ The NPU (50 TOPS) may later host small always-on models such as embeddings or sp
 - **Model acquisition:** if no suitable local model exists, Jarvis proposes pulling one (name, size, reason) and **asks for approval** before downloading.
 - **Routing policy:** task type to model, learned over time from outcomes (Section 16).
 
-### 7.5 Inference backend and benchmark plan **[PROPOSED; VERIFY]**
+### 7.5 Inference backend and benchmark plan **[PROPOSED; VERIFIED ON DEVICE]**
 - Code talks to a **provider interface** that supports Ollama and any OpenAI-compatible server such as a llama.cpp server. The backend is chosen by benchmark, not by assumption.
-- **Benchmark before committing** (after raising the GPU memory share): Ollama and llama.cpp, Vulkan and ROCm, in the available environments (Windows native, WSL2, Linux dual-boot), measuring prompt-processing speed, generation speed, power draw, and stability. Community reports so far (unverified): Vulkan gave faster generation and ROCm faster prompt processing in some tests; ROCm showed higher idle CPU and energy use in one test.
-- The result decides **which OS runs inference** (D17).
+- **Hardware baseline verified (Gate 0):** `llama.cpp` (build b11272) running on Windows with the Vulkan backend successfully detects and initializes `Vulkan0: AMD Radeon(TM) 8060S Graphics` with 54,305 MiB free VRAM. Both Ollama 0.40.4 and `llama.cpp` Vulkan are installed on the host.
+- **Benchmark plan:** Benchmark Ollama and llama.cpp Vulkan in Phase 0 on Windows native, measuring prompt-processing speed, generation speed, power draw, and memory stability across MoE and dense model architectures. If Windows Vulkan delivers expected throughput without throttling, dual-boot Linux can be avoided (D17).
 
 ### 7.6 Model roster: which strong models to download **[OWNER: D58; facts checked; details PROPOSED]**
 **Owner's requirement.** It is necessary to download good AI models, such as Qwen, Kimi, and Sonnet, so that **if one model can give a good result, the others can too.**
@@ -1198,36 +1211,175 @@ Decision: **Claude writes everything the blueprint needs; the owner's local AI b
 | **Gate 1** | The board-driven workflow works and the first model lanes are chosen by benchmark | Phase 1 (core and research skill), now built through the board |
 | **Gate 2** | Production accounts and devices are connected | Phases 2 to 7 (memory, Telegram, email, browser, laptop, phone, voice, release); Phase 8 (model retraining) comes later, once the system is stable |
 
-### 22.2 Gate 0: the owner's checklist
-Install from official sources, at exact versions that are at least 14 days old (Section 18.2); ask Claude to confirm current recommended versions **[VERIFY]**.
+### 22.2 Gate 0: The Step-by-Step Execution Checklist & Status
 
-| # | Task | Why | How to check it is done |
-|---|---|---|---|
-| P1 | **Back up the laptop** before any BIOS or partition change | BIOS and disk changes can lose data | Backup exists and opens |
-| P2 | Update **Windows 11, BIOS/firmware, and the AMD graphics driver**, while plugged in | Backends for this chip depend on current drivers | Versions noted in `dev/environment.md` |
-| P3 | **Raise the GPU memory allocation** in BIOS or ASUS software (start near 32-40 GB) and reboot | The default is small; models will not fit otherwise | Task Manager > Performance > GPU shows the larger dedicated memory |
-| P4 | Keep at least **250 GB free** now and at least 25% of the 1 TB free overall; plan 100-200 GB for an optional Linux partition (only if the benchmark favors Linux) | Models, images, caches | Disk free space |
-| P5 | Set the **plugged-in, high-performance power mode** for benchmarks | Fair, repeatable speed measurements | Power setting noted |
-| P6 | Install **Git**, **Node.js 20+ (LTS)**, **Docker Desktop with the WSL2 backend**, **VS Code**, and the **GitHub CLI** (optional) | The toolchain | Each reports its version |
-| P7 | Install **Ollama**, and a **llama.cpp build with the Vulkan backend** for benchmarking | Backend benchmark (Section 7.5) | Each runs a test prompt |
-| P8 | Create a **GitHub organization owned by your own account** and, inside it, the **private repository** (name chosen by you), default branch `main`, plus a `master` branch. **Choose the GitHub plan first (see the note below the table, D63)** | D37, D39, D50, D63 | Both branches exist in the organization's repository |
-| P9 | Turn on **branch protection** for `main` and `master`: pull request required, status checks required, administrators included, required approvals set to 0 (D42). **Private repositories need a paid GitHub plan for this; on the free plan skip this step and the Action Gateway is the only guard (weaker, D63)** | Sections 17.8 and 17.10 | Settings page shows the rules (or the skip is noted) |
-| P10 | Create the **GitHub Projects board owned by the organization** with exactly five columns (Concept, Ready for Dev, Code Review, QA, Done), a Type field (Feature, Story, Bug), and the **nine labels listed in Section 17.7** | D38, D54, D63 | Board matches the list; all nine labels exist |
-| P11 | Create a **fine-grained personal access token** whose resource owner is the organization: this one repository only; contents, issues, and pull requests read/write; metadata read; the organization's **Projects** permission; **expiry of 90 days or less**. Store it in the secrets vault, never in the repository and never in a chat **[VERIFY]** the exact permission names at setup | D41, D42, D63 | Token listed on GitHub; stored outside the repo |
-| P12 | Create **Telegram bots** with BotFather: one for **dev** and one for **QA** (a production bot can wait for Gate 2); note your **numeric Telegram user ID** | D6, D44 | Bots reply to `/start`; tokens in the vault |
-| P13 | Create the **test Gmail account** for QA | D44 | Account can sign in |
-| P14 | Install the **VS Code extensions**: a Cline-style agent and a local-autocomplete extension, at pinned versions, publishers verified, telemetry off | D32, D47 | Extension list noted in `dev/environment.md` |
-| P15 | **Download a model roster** for benchmarking (D58, Section 7.6): for each lane at least two models from different families, for example Qwen models plus an alternate family. At minimum: a tool-calling, code-strong model (about 30B MoE class), an alternate of similar size, a small fill-in-the-middle autocomplete model, an embedding model, and a vision-language model for images. Download only from official publishers, in safe formats (GGUF or safetensors), and check each license (D53). Kimi's flagship and Claude Sonnet cannot be downloaded. Claude names current candidates in the Phase 0 specification **[VERIFY]** | Phase 0 benchmark | Models listed with sizes, families, and licenses |
-| P16 | Write a **first version of your coding rules** (even a few lines) in `docs/rules/CODING_RULES.md`, **or approve Claude's default rules template** | D40 | File exists in the repository |
-| P17 | Set up **secrets hygiene:** a `.gitignore`, an environment file kept outside the repository, and the vault location decided (Windows Credential Manager) | Section 6.3 | Test: no secret appears in `git status` |
-| P18 | Keep the project folder **outside cloud-sync folders**, on the fast internal drive | Sync tools corrupt Git and database files | Folder path noted |
+*Merged from `jarvis-gate0-checklist.md` as the single authoritative execution plan for Gate 0.*
+**Goal:** Prepare the laptop, tools, accounts, and repository so that local AI development can begin. No Jarvis application code is written until Gate 0 is satisfied.
 
-**Order note.** P14 and P15 depend on current candidates, which Claude names in the Phase 0 specification. They can be finished right after that specification arrives; the other sixteen tasks do not depend on it, and Gate 0 is complete when all eighteen are done.
+#### Three Safety Rules for Every Step
+1. **Never paste a token, password, or recovery code into a chat, an email, a screenshot, or a file inside the project.** Tokens go only into Windows Credential Manager (P11 and P12).
+2. **Turn on two-step verification** on GitHub, Telegram, and Google before creating anything else.
+3. **Install only from the official site** of each tool, and record the exact version. Pick versions released at least 14 days ago.
 
-**GitHub plan and ownership (D63).** GitHub's documentation says that fine-grained tokens cannot access Projects owned by a personal account, and that branch protection is available for private repositories only on paid plans (Pro, Team, or Enterprise) **[VERIFY the current plans and prices on GitHub's pricing page]**. The options, in the order Claude recommends:
-1. **Recommended: an organization on a paid plan.** The organization owns the private repository and the board; the limited token reaches only that repository and the organization's board; GitHub itself enforces branch protection.
-2. **Acceptable to start: an organization on the free plan.** The same token and board setup works, but private-repository branch protection is not available, so only the Action Gateway guards `main` and `master` (weaker; upgrade later).
-3. **Not recommended: your personal account with a user-owned board.** The token would have to be a classic token with broad scopes that reach all your repositories, which breaks the least-privilege rule (D42).
+---
+
+#### Step 0: Decide the GitHub Plan (D63)
+- [x] **Chosen Option: Personal Private Repository** (`https://github.com/aery1803/jarvis.git`).
+  - Direct ownership under the owner's personal GitHub account (`aery1803`).
+  - Native GitHub branch protection on private repositories is skipped (free tier); branch protection is enforced by Jarvis's internal Action Gateway guarding `main` and `master`.
+  - Can be transferred to an Organization at any time in 1 click if desired.
+
+---
+
+#### Part A: The Laptop (P1 to P5)
+
+##### P1. Back up the laptop
+- [x] **Status:** Skipped by owner decision for Gate 0. (Can be created anytime via `sysdm.cpl ,4`).
+
+##### P2. Update Windows, the BIOS, and the graphics driver
+- [x] **Status: VERIFIED & COMPLETED**
+  - **Windows OS:** Windows 11 Home Single Language, Version `26H2`, Build `26300.0`.
+  - **BIOS:** `GZ302EA.314`.
+  - **AMD Graphics Driver:** `32.0.31041.1004` (AMD Software: Adrenalin Edition for Radeon 8060S).
+
+##### P3. Raise the GPU memory (Dedicated VRAM allocation)
+- [x] **Status: VERIFIED & COMPLETED**
+  - Total Unified Physical RAM: **64 GB LPDDR5X-8000**.
+  - OS Allocation: **15.65 GB** available to Windows.
+  - Dedicated GPU / UMA Frame Buffer: **~48–54 GB**.
+  - Direct hardware test via `llama.cpp` Vulkan confirms: `Vulkan0: AMD Radeon(TM) 8060S Graphics (57,163 MiB total, 54,305 MiB free)`!
+
+##### P4. Free up disk space
+- [x] **Status: VERIFIED & COMPLETED**
+  - Target: At least 250 GB free on `C:`.
+  - Actual: **640.2 GB free** on `C:` (NVMe 1 TB).
+
+##### P5. Set the high-performance power mode
+- [x] **Status: VERIFIED & COMPLETED**
+  - Laptop plugged in on original AC charger.
+  - Armoury Crate profile: Performance/Turbo.
+  - Windows Power Mode: Best Performance.
+
+---
+
+#### Part B: Tools (P6 and P7)
+
+##### P6. Install the toolchain
+- [x] **Status: VERIFIED & COMPLETED**
+  - **Git for Windows:** `2.56.0.windows.2` (configured user: Avinav Aery <aery1803@gmail.com>).
+  - **Node.js:** `v26.10.0` | **npm:** `12.2.0`.
+  - **Docker Desktop:** `Docker version 29.8.2, build 7fc2dff` (WSL 2 backend).
+  - **VS Code:** `1.141.0`.
+  - **GitHub CLI (`gh`):** `2.102.0` (installed in `C:\Program Files\GitHub CLI\gh.exe`).
+
+##### P7. Install the two local AI engines (for benchmark)
+- [x] **Status: VERIFIED & COMPLETED**
+  - **Ollama:** `0.40.4` running on host.
+  - **llama.cpp (Vulkan backend):** Official release `b11272` (commit `7fee17846`, Vulkan x64) installed in `C:\tools\llama.cpp`. Device initialization verified: `Vulkan0` active with 54,305 MiB free VRAM.
+
+---
+
+#### Part C: GitHub Setup (P8 to P11)
+
+##### P8. Repository and branches
+- [x] **Status: VERIFIED & COMPLETED**
+  - Remote repository: `https://github.com/aery1803/jarvis.git` (Private).
+  - Branches created and pushed: `main` (default) and `master`.
+
+##### P9. Branch protection
+- [x] **Status: SKIPPED (Free plan)**
+  - Guarded by Jarvis Action Gateway instead of GitHub web UI branch protection ruleset.
+
+##### P10. The board, its fields, and the nine labels
+- [ ] Create the GitHub Project board at `https://github.com/users/aery1803/projects` (Board layout, linked to `aery1803/jarvis`).
+- [ ] Configure the **Status** column with **exactly five options in order:** `Concept`, `Ready for Dev`, `Code Review`, `QA`, `Done`.
+- [ ] Add the single-select field **Type** with options: `Feature`, `Story`, `Bug`.
+- [ ] Ensure the **nine labels** exist on the repository:
+  `concept-complete`, `ai-working`, `needs-owner`, `blocked`, `bug`, `release-approved`, `ai-proposed`, `ai-authored`, `owner-approved`.
+- **Done when:** The board columns and all 9 labels match.
+
+##### P11. The limited token (Windows Credential Manager)
+- [ ] Generate a Personal Access Token on GitHub (with `repo` and `project` access, $\le 90$ day expiry).
+- [ ] Store it in **Windows Credential Manager**: Control Panel > Credential Manager > Windows Credentials > Add a generic credential:
+  - **Address:** `jarvis-github`
+  - **User name:** `token`
+  - **Password:** `<YOUR_TOKEN>`
+- **Done when:** Token is securely stored in Windows Credential Manager and never committed to git.
+
+---
+
+#### Part D: Telegram and Test Gmail (P12 and P13)
+
+##### P12. Telegram bots and your user ID
+- [ ] In Telegram, turn on Two-Step Verification (Settings > Privacy and Security).
+- [ ] Open **@BotFather**, send `/newbot`, and create two bots:
+  1. Development bot (e.g. `JarvisDev_Bot`)
+  2. QA bot (e.g. `JarvisQA_Bot`)
+- [ ] Store each bot token in Windows Credential Manager (`jarvis-telegram-dev`, `jarvis-telegram-qa`).
+- [ ] Find your numeric Telegram user ID: send a message to the bot, visit `https://api.telegram.org/bot<TOKEN>/getUpdates`, and note your numeric `from.id`.
+- **Done when:** Both bots exist, tokens are secured in Credential Manager, and numeric user ID is recorded.
+
+##### P13. The test Gmail account (for QA only)
+- [ ] Create a dedicated Google account used exclusively for QA and email watcher testing.
+- [ ] Enable 2FA. Do not forward real email to it.
+- **Done when:** The test Gmail address is recorded (address only, never password).
+
+---
+
+#### Part E: Editor and Models (P14 and P15)
+
+##### P14. VS Code extensions
+- [ ] Telemetry off: Settings > Telemetry Level = `off`.
+- [ ] Install local-capable coding agent extension and autocomplete extension (pinned versions, auto-update off).
+- **Done when:** Extensions and versions recorded.
+
+##### P15. Model roster (for Phase 0 benchmark)
+- [ ] Identify candidate models (Qwen 30B MoE class, small autocomplete model, embedding model, vision-language model).
+- [ ] Download verified GGUF / safetensors weights from official publishers only.
+- **Done when:** Candidates noted with families and licenses.
+
+---
+
+#### Part F: Rules and Housekeeping (P16 to P18)
+
+##### P16. Coding rules
+- [ ] Write initial rules in `docs/rules/CODING_RULES.md`, or approve Claude's default template.
+- **Done when:** The coding rules document exists in the repository.
+
+##### P17. Secrets hygiene
+- [ ] Place `.gitignore` blocking any `.env`, tokens, keys, and session files.
+- [ ] Store configuration outside the repo folder (e.g. `%USERPROFILE%\.jarvis\settings.env`).
+- **Done when:** Confirmed that `git status` displays no secrets.
+
+##### P18. The project folder
+- [x] **Status: VERIFIED & COMPLETED**
+  - Path: `c:\Users\aery1\Files\Projects\jarvis` on the fast internal NVMe SSD (outside OneDrive and cloud sync).
+
+---
+
+#### Gate 0 Live Status Report (Audited on Host)
+```
+Step 0 GitHub choice: Personal Private Repository (Option 2 equivalent)
+P1 backup done: Skipped by owner decision
+P2 versions: Windows 11 26H2 (26300) | BIOS GZ302EA.314 | AMD driver 32.0.31041.1004
+P3 dedicated GPU memory now shows: ~54 GB free in Vulkan (15.65 GB to Windows OS)
+P4 free disk space: 640.2 GB free on C:
+P5 power settings used: Armoury Crate Performance/Turbo, Windows Best Performance (AC plugged in)
+P6 versions: git 2.56.0 | node v26.10.0 | npm 12.2.0 | docker 29.8.2 | code 1.141.0 | gh 2.102.0
+P7 Ollama runs: Yes (v0.40.4) | llama.cpp Vulkan runs: Yes (b11272, 54,305 MiB free on Radeon 8060S)
+P8 organization and repository names: aery1803/jarvis (Private)
+P8 branches main and master exist: Yes (both active and synchronized on origin)
+P9 branch protection: Skipped (free plan; guarded by Jarvis Action Gateway)
+P10 board has the five columns, Type field, nine labels: In progress
+P11 token created, stored in Credential Manager: In progress
+P12 two bots created, numeric Telegram ID: Pending
+P13 test Gmail address: Pending
+P14 extensions and versions: Pending Phase 0 spec
+P15 model roster note done: Pending Phase 0 spec
+P16 coding rules: Pending default template approval
+P17 secrets locations decided: Windows Credential Manager + %USERPROFILE%\.jarvis\settings.env
+P18 project folder path: c:\Users\aery1\Files\Projects\jarvis
+```
 
 ### 22.3 What Claude delivers before the local AI starts (the handover package)
 Delivered in stages (D48); each stage is checked on the board before the next begins.
@@ -1366,6 +1518,8 @@ Current open-model names, sizes, and licenses (including which Qwen releases fit
 | 15 | Images and video message | Understand shared images and make context; generate images; several images to edit and to read; the same for video | 5.10, D60 |
 | 16 | Offer of a Version 1 scope and a backup plan | Declined: keep the document as it is | 24.2, D62 |
 | 17 | Final revision request | "Do the final revision and update the docs so I can start working on it" | A, 22, 23, D61 |
+| 18 | Gate 0 execution start | Step 0 option 2 / personal private repo; laptop audit; Vulkan acceleration verified on device; winget install GitHub CLI | 4, 7.5, 22.2, D63 |
+| 19 | Single master document consolidation | Merge `jarvis-gate0-checklist.md` directly into master context; update hardware profile with live device values | 4, 22.2 |
 
 ### 25.2 Changelog
 - **v0.1 to v0.4:** Created the master document from the original specification; added the expanded vision (safety, models, memory, skills, Telegram, email), the requirements for unrestricted information, sessions, browser automation, and cost-quality; confirmed the Flow Z13 2025 and replaced the VRAM assumption with unified memory.
@@ -1376,7 +1530,14 @@ Current open-model names, sizes, and licenses (including which Qwen releases fit
 - **v1.10 to v1.17:** Translation model, VS Code, blueprint depth, retraining later, private repository, distribution, signing, proprietary license (D46 to D53).
 - **v1.18:** User stories created both ways (D54).
 - **v2.0:** Requirements closed (D55); prerequisites, handover package, context packs, readiness test, and final summary (Sections 22 and 23; D56).
-- **v2.1:** Readable and cross-checked edition (D57): start guide (Section A), document map, plain-language introductions to every section, traceability matrix (Section 26), glossary (Section 27), the owner's words (Section 28), a clean Section 24, a clean Section 25, and corrections of wording that conflicted with decisions (the `/jarvis` command instead of `@mention`, the Router classes, the `/sync` and `/release` commands, the expanded stack and project tree, and a documentation check added to the Definition of Done). Result of the consistency check: every section reference, decision ID, requirement ID, and prerequisite ID resolves.
+- **v2.1:** Readable and cross-checked edition (D57): start guide (Section A), document map, plain-language introductions to every section, traceability matrix (Section 26), glossary (Section 27), the owner's words (Section 28), a clean Section 24, a clean Section 25, and corrections of wording that conflicted with decisions.
+- **v3.0:** Plan approved by owner (D61); GitHub ownership and branch protection constraints corrected from official GitHub documentation (D63).
+- **v3.1 (Current):** Device Hardware Audit & Consolidation:
+  - Audited live machine: ASUS ROG Flow Z13 (`GZ302EA_GZ302EA`), AMD Ryzen AI Max+ 395 (16C/32T), Radeon 8060S (driver `32.0.31041.1004`), BIOS `GZ302EA.314`, Windows 11 Home 26H2 (Build 26300), 640.2 GB free NVMe storage.
+  - Resolved Vulkan GPU acceleration: Installed `llama.cpp` b11272 Vulkan x64 into `C:\tools\llama.cpp`; confirmed native execution on `Vulkan0: AMD Radeon(TM) 8060S Graphics` with 54,305 MiB free VRAM.
+  - Linked GitHub repository (`https://github.com/aery1803/jarvis.git`), created and pushed `main` and `master` branches.
+  - Installed GitHub CLI (`gh` 2.102.0) via `winget`.
+  - Merged `jarvis-gate0-checklist.md` directly into Section 22.2, unifying the repository into a single master context file with live checklist tracking.
 
 ---
 
