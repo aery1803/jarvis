@@ -1,0 +1,51 @@
+# SearXNG Configuration for Jarvis Local AI Agent
+# Authority: Section 10, Section 19.1, Section 20.1 (JSON Output must be enabled)
+
+use_default_settings: true
+
+general:
+  debug: false
+  instance_name: "Jarvis SearXNG Instance"
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "en"
+  formats:
+    - html
+    - json
+
+server:
+  port: 8080
+  bind_address: "0.0.0.0"
+  secret_key: "jarvis-local-searxng-instance-key-replace-in-production"
+  limiter: false
+  image_proxy: false
+
+ui:
+  static_use_hash: true
+  default_locale: "en"
+  theme_args:
+    simple_style: "auto"
+
+engines:
+  - name: google
+    engine: google
+    shortcut: g
+    timeout: 3.0
+  - name: bing
+    engine: bing
+    shortcut: b
+    timeout: 3.0
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+    timeout: 3.0
+  - name: wikipedia
+    engine: wikipedia
+    shortcut: wp
+    timeout: 3.0
+  - name: github
+    engine: github
+    shortcut: gh
+    timeout: 3.0
