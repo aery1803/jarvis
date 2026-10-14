@@ -87,6 +87,22 @@ export class ModelRegistry {
       notes: 'Precision 30B-class heavy model from initial concept doc',
     });
 
+    // 2d. High-Intelligence 14B Reasoning Lane - Qwen 2.5 14B
+    this.register({
+      id: 'qwen2.5:14b',
+      name: 'Qwen 2.5 14B Instruct',
+      lane: 'deep',
+      family: 'qwen',
+      parameterSize: '14B',
+      quantization: 'q4_k_m',
+      memoryRequirementBytes: 9.0 * 1024 * 1024 * 1024,
+      contextLength: 32768,
+      measuredTokensPerSec: 26.5,
+      strengths: ['advanced reasoning', 'multi-model ensemble', 'synthesized analysis'],
+      isPrimary: false,
+      notes: 'High-intelligence 14B reasoning model',
+    });
+
     // 3. Fast General Assistant Lane
     this.register({
       id: 'qwen2.5:3b',
