@@ -1309,13 +1309,10 @@ Decision: **Claude writes everything the blueprint needs; the owner's local AI b
 #### Part D: Telegram and Test Gmail (P12 and P13)
 
 ##### P12. Telegram bots and your user ID
-- [ ] In Telegram, turn on Two-Step Verification (Settings > Privacy and Security).
-- [ ] Open **@BotFather**, send `/newbot`, and create two bots:
-  1. Development bot (e.g. `JarvisDev_Bot`)
-  2. QA bot (e.g. `JarvisQA_Bot`)
-- [ ] Store each bot token in Windows Credential Manager (`jarvis-telegram-dev`, `jarvis-telegram-qa`).
-- [ ] Find your numeric Telegram user ID: send a message to the bot, visit `https://api.telegram.org/bot<TOKEN>/getUpdates`, and note your numeric `from.id`.
-- **Done when:** Both bots exist, tokens are secured in Credential Manager, and numeric user ID is recorded.
+- [x] **Status: VERIFIED & COMPLETED**
+  - Dev and QA bots created via @BotFather.
+  - Tokens stored securely in Windows Credential Manager under `jarvis-telegram-dev` and `jarvis-telegram-qa`.
+  - Numeric Telegram User ID identified and retained in local secure environment. No tokens exposed in repo.
 
 ##### P13. The test Gmail account (for QA only)
 - [ ] Create a dedicated Google account used exclusively for QA and email watcher testing.
@@ -1371,7 +1368,7 @@ P8 branches main and master exist: Yes (both active and synchronized on origin)
 P9 branch protection: Skipped (free plan; guarded by Jarvis Action Gateway)
 P10 board has the five columns, Type field, nine labels: Yes (Board #2 created, linked to repo, 5 columns & 9 labels active)
 P11 token created, stored in Credential Manager: Yes (target jarvis-github)
-P12 two bots created, numeric Telegram ID: Pending
+P12 two bots created, numeric Telegram ID: Yes (stored in Credential Manager and local secure env)
 P13 test Gmail address: Pending
 P14 extensions and versions: Pending Phase 0 spec
 P15 model roster note done: Pending Phase 0 spec
