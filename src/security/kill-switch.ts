@@ -37,6 +37,15 @@ export interface AuditLogEntry {
   details?: Record<string, unknown>;
 }
 
+export interface KillSwitchOptions {
+  /** How often `isKilled()` re-reads the persisted row so a /kill in another launcher is seen. Defaults to 1 s. */
+  refreshMs?: number;
+  /** Injected by tests so no real time passes. */
+  now?: () => number;
+}
+
+export const DEFAULT_KILL_REFRESH_MS = 1000;
+
 export class KillSwitch {
   private static instance: KillSwitch | null = null;
   private killed = false;
@@ -44,11 +53,17 @@ export class KillSwitch {
   private auditCollection: Collection<AuditLogEntry>;
   private stateCollection: Collection<KillSwitchStateDoc>;
   private listeners = new Set<KillTriggerListener>();
+  private readonly refreshMs: number;
+  private readonly now: () => number;
+  private lastSyncAt = 0;
 
   constructor(
     private store: DocumentStore,
-    private sessionManager?: SessionManager
+    private sessionManager?: SessionManager,
+    options: KillSwitchOptions = {}
   ) {
+    this.refreshMs = options.refreshMs ?? DEFAULT_KILL_REFRESH_MS;
+    this.now = options.now ?? Date.now;
     this.auditCollection = this.store.getCollection<AuditLogEntry>('audit_log');
     this.stateCollection = this.store.getCollection<KillSwitchStateDoc>(KILL_SWITCH_STATE_COLLECTION);
     // Loaded synchronously so a restart (nodemon, auto-pull) cannot silently re-arm Jarvis.
@@ -58,6 +73,7 @@ export class KillSwitch {
       this.killReason = persisted.reason;
       logger.warn(`[KillSwitch] Restored engaged state from the document store: ${persisted.reason}`);
     }
+    this.lastSyncAt = this.now();
     KillSwitch.instance = this;
   }
 
@@ -65,16 +81,43 @@ export class KillSwitch {
     return KillSwitch.instance;
   }
 
+  /**
+   * Web, Telegram and the board poller can run as separate processes sharing one store, so a /kill or /resume
+   * from another launcher is picked up by re-reading the persisted row at most every `refreshMs`. That halts NEW
+   * work here; work already running in this process is only aborted by a trigger made in this process, because
+   * the abort controllers and approval requests live in memory.
+   */
+  private syncFromStore(): void {
+    const at = this.now();
+    if (at - this.lastSyncAt < this.refreshMs && at >= this.lastSyncAt) return;
+    this.lastSyncAt = at;
+    try {
+      const persisted = this.stateCollection.findOne({ id: KILL_SWITCH_STATE_ID });
+      if (!persisted) return;
+      if (persisted.killed !== this.killed) {
+        logger.warn(`[KillSwitch] Another process ${persisted.killed ? 'engaged' : 'reset'} the kill switch (${persisted.actor}).`);
+      }
+      this.killed = persisted.killed;
+      this.killReason = persisted.killed ? persisted.reason : '';
+    } catch (err) {
+      // Keep the last known state: a transient read failure must not silently re-arm Jarvis.
+      logger.error(`[KillSwitch] Could not re-read the persisted state: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   isKilled(): boolean {
+    this.syncFromStore();
     return this.killed;
   }
 
   getKillReason(): string {
+    this.syncFromStore();
     return this.killReason;
   }
 
   /** Throws `KillSwitchEngagedError` while engaged; call before any state-changing or model-driven work. */
   assertNotKilled(): void {
+    this.syncFromStore();
     if (this.killed) {
       throw new KillSwitchEngagedError(this.killReason);
     }
@@ -91,6 +134,7 @@ export class KillSwitch {
   async trigger(actor: string, reason = 'Emergency stop triggered'): Promise<{ tasksAborted: number }> {
     this.killed = true;
     this.killReason = reason;
+    this.lastSyncAt = this.now();
     this.persist(true, reason, actor);
 
     const pending: Array<Promise<void>> = [];
@@ -147,6 +191,7 @@ export class KillSwitch {
   async reset(actor: string): Promise<void> {
     this.killed = false;
     this.killReason = '';
+    this.lastSyncAt = this.now();
     this.persist(false, '', actor);
 
     await this.logAudit({

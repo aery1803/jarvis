@@ -129,4 +129,32 @@ describe('ApprovalBroker', () => {
     });
     assert.equal((await flaky.request(base)).approved, false);
   });
+
+  test('clearNotifier removes only the notifier it is given and restores the channel it displaced', async () => {
+    const broker = new ApprovalBroker();
+    const seen: string[] = [];
+    const passive = async (req: ApprovalRequest): Promise<void> => void seen.push(`passive:${req.id}`);
+    const channel = async (): Promise<void> => undefined;
+    broker.setNotifier(passive);
+    broker.setNotifier(channel);
+
+    broker.clearNotifier(passive);
+    assert.equal(broker.hasNotifier(), true, 'a notifier that is no longer the current one is left alone');
+    const stillChannel = broker.request({ ...base });
+    assert.equal(broker.pending().length, 1);
+    broker.denyAll('x');
+    await stillChannel;
+
+    broker.clearNotifier(channel);
+    const pending = broker.request({ ...base, description: 'later' });
+    await new Promise((r) => setImmediate(r));
+    assert.equal(seen.length, 1, 'the displaced channel is asked again');
+    assert.equal(broker.pending().length, 1);
+    broker.denyAll('done');
+    await pending;
+
+    broker.clearNotifier(passive);
+    assert.equal(broker.hasNotifier(), false);
+    assert.match((await broker.request(base)).reason ?? '', /no approval channel/i);
+  });
 });

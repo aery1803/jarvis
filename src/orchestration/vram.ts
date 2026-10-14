@@ -3,34 +3,48 @@ import type { InstalledModelInfo } from './lanes.js';
 
 type GpuProbe = typeof probeGpu;
 
+/** Free VRAM probe; `total` reads the pool size from the same cached `probeGpu()` result. */
+export type VramProbe = (() => Promise<number | null>) & { total: () => Promise<number | null> };
+
 /**
  * Free VRAM from `probeGpu()` with a short cache: each probe spawns `llama-cli --list-devices`, which is too
- * slow to run on every chat message. Resolves null (unknown) when no device reports a free figure.
+ * slow to run on every chat message. Resolves null (unknown) when no device reports a free figure. `total` is the
+ * size of the device with the most free memory, from the same probe.
  */
-export function createVramProbe(options: { ttlMs?: number; probe?: GpuProbe; now?: () => number } = {}): () => Promise<number | null> {
+export function createVramProbe(options: { ttlMs?: number; probe?: GpuProbe; now?: () => number } = {}): VramProbe {
   const ttlMs = options.ttlMs ?? 5000;
   const probe = options.probe ?? probeGpu;
   const now = options.now ?? Date.now;
-  let cached: { at: number; value: number | null } | null = null;
+  let cached: { at: number; free: number | null; total: number | null } | null = null;
 
-  return async () => {
-    if (cached && now() - cached.at < ttlMs) return cached.value;
-    let value: number | null = null;
+  const read = async (): Promise<{ free: number | null; total: number | null }> => {
+    if (cached && now() - cached.at < ttlMs) return cached;
+    let free: number | null = null;
+    let total: number | null = null;
     try {
       const gpu = await probe();
-      const free = gpu.devices.map((d) => d.freeBytes).filter((b): b is number => typeof b === 'number');
-      value = free.length > 0 ? Math.max(...free) : null;
+      const withFree = gpu.devices.filter((d): d is typeof d & { freeBytes: number } => typeof d.freeBytes === 'number');
+      if (withFree.length > 0) {
+        const best = withFree.reduce((a, b) => (b.freeBytes > a.freeBytes ? b : a));
+        free = best.freeBytes;
+        total = typeof best.totalBytes === 'number' ? best.totalBytes : null;
+      }
     } catch {
-      value = null;
+      free = null;
+      total = null;
     }
-    cached = { at: now(), value };
-    return value;
+    cached = { at: now(), free, total };
+    return cached;
   };
+
+  const freeProbe = (async () => (await read()).free) as VramProbe;
+  freeProbe.total = async () => (await read()).total;
+  return freeProbe;
 }
 
-let sharedProbe: (() => Promise<number | null>) | null = null;
+let sharedProbe: VramProbe | null = null;
 
-export function getSharedVramProbe(): () => Promise<number | null> {
+export function getSharedVramProbe(): VramProbe {
   sharedProbe ??= createVramProbe();
   return sharedProbe;
 }

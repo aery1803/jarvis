@@ -28,8 +28,10 @@ export interface AgentSource {
 
 export interface AgentConsensus {
   status: 'VERIFIED' | 'DISPUTED' | 'UNCONFIRMED';
-  /** Source agreement 0..1; never proof of truth. */
+  /** Source agreement 0..1; never proof of truth. 0 with `insufficientSources` set means nothing was compared, not disagreement. */
   score: number;
+  /** Set when there was nothing to agree with: no readable source, a single one, or several from one origin. */
+  insufficientSources?: 'none' | 'single_source' | 'same_origin';
   independentSources: number;
   summary: string;
 }

@@ -42,6 +42,8 @@ export interface JarvisMessageMeta {
   toolCalls?: unknown[];
   /** True when the stream ended early (client disconnect or provider failure) and `content` is incomplete. */
   partial?: boolean;
+  /** True when the model stopped at its output limit, so the reply ends mid-thought. */
+  truncated?: boolean;
 }
 
 /** One conversation turn, shared by every surface (web chat, Telegram) that writes to the session. */

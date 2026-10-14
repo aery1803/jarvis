@@ -12,7 +12,7 @@ export type MobileNotificationInput = Omit<MobileNotification, 'id' | 'timestamp
 
 function validateStatus(status: MobileDeviceStatus): void {
   if (!status.deviceId.trim()) throw new Error('Device id must not be empty.');
-  if (!Number.isFinite(status.batteryLevel) || status.batteryLevel < 0 || status.batteryLevel > 100) {
+  if (status.batteryLevel !== null && (!Number.isFinite(status.batteryLevel) || status.batteryLevel < 0 || status.batteryLevel > 100)) {
     throw new Error(`Battery level must be between 0 and 100 (got ${status.batteryLevel}).`);
   }
 }

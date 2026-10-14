@@ -97,10 +97,30 @@ describe('BrowserAutomationEngine risk assessment', () => {
     assert.equal(engine.assessActionRisk({ type: 'click', selector: '#tweet' }).isRisky, true);
   });
 
-  test('flags payment-looking URL paths', () => {
-    assert.equal(engine.assessActionRisk({ type: 'navigate', url: 'https://shop.example.com/cart/checkout' }).isRisky, true);
-    assert.equal(engine.assessActionRisk({ type: 'navigate', url: 'https://example.com/payloads/list' }).isRisky, false);
-    assert.equal(engine.assessActionRisk({ type: 'navigate', url: 'https://docs.local.io' }).isRisky, false);
+  test('a GET navigation is never scored on its URL words, so browse_page can read pages about payments', () => {
+    for (const url of [
+      'https://shop.example.com/cart/checkout',
+      'https://en.wikipedia.org/wiki/Payment',
+      'https://docs.stripe.com/payments',
+      'https://www.paypal.com/about',
+      'https://news.example.com/donate-blood-drive',
+      'https://news.example/subscribe-to-newsletter',
+      'https://example.com/payloads/list',
+    ]) {
+      assert.equal(engine.assessActionRisk({ type: 'navigate', url }).isRisky, false, url);
+    }
+  });
+
+  test('interactive actions are still scored: click, fill and press on payment controls', () => {
+    assert.equal(engine.assessActionRisk({ type: 'click', selector: '#checkout' }).isRisky, true);
+    assert.equal(engine.assessActionRisk({ type: 'click', selector: '#a', value: 'Confirm Purchase' }).isRisky, true);
+  });
+
+  test('executeAction navigates to a payment-themed URL without any approval', async () => {
+    const page = { url: 'https://en.wikipedia.org/wiki/Payment', html: '<title>Payment</title><p>A payment is a transfer.</p>', status: 200, contentType: 'text/html', truncated: false };
+    const reading = new BrowserAutomationEngine(undefined, { fetchPage: async () => page });
+    const result = await reading.executeAction({ type: 'navigate', url: page.url }, false);
+    assert.equal(result.success, true);
   });
 
   test('flags form submission, and payment forms specifically', () => {
@@ -282,5 +302,33 @@ describe('fetchPageGuarded', () => {
     const result = await fetchPageGuarded('https://example.com/', { resolveHost: publicResolver, fetchImpl: big, maxBytes: 1000 });
     assert.equal(result.html.length, 1000);
     assert.equal(result.truncated, true);
+  });
+});
+
+describe('BrowserAutomationEngine with an Action Gateway', () => {
+  test('an owner-approved risky action is not asked a second time and is audited once', async () => {
+    const { ActionGateway } = await import('../src/devagent/action-gateway.js');
+    const { OwnActionRegistry } = await import('../src/devagent/action-registry.js');
+    const registry = new OwnActionRegistry(':memory:');
+    // No broker: a Tier 2 action that has to ask is denied, so success proves the approval was forwarded.
+    const gateway = new ActionGateway(registry, { minFreeMemoryBytes: 1, getFreeMemory: () => 16e9 });
+    const clicked: string[] = [];
+    const driver: BrowserDriver = {
+      navigate: async (url) => ({ url, title: 'T', html: '<p>page</p>' }),
+      click: async (selector) => {
+        clicked.push(selector);
+        return { success: true };
+      },
+      fill: async () => ({ success: true }),
+      press: async () => ({ success: true }),
+      wait: async () => ({ success: true }),
+      content: async () => ({ url: 'https://example.com/', title: 'T', html: '<p>page</p>' }),
+    };
+    const engine = new BrowserAutomationEngine(gateway, { driver });
+    const result = await engine.executeAction({ type: 'click', selector: '#btn-checkout-pay-now' }, true);
+    assert.equal(result.success, true);
+    assert.deepEqual(clicked, ['#btn-checkout-pay-now']);
+    assert.equal(registry.getAllActions().length, 1);
+    await assert.rejects(engine.executeAction({ type: 'click', selector: '#btn-checkout-pay-now' }, false), /Blocked/);
   });
 });

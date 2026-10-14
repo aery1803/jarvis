@@ -11,9 +11,22 @@ export interface MemoryGovernorOptions {
   sleep?: (ms: number) => Promise<void>;
 }
 
+/** A heavy turn can run for minutes, so a queued turn waits this long unless the caller says otherwise. */
+export const DEFAULT_LEASE_WAIT_MS = 15 * 60 * 1000;
+
 export interface WithLeaseOptions {
-  /** Longest wait for another heavy model to finish. Default 120 s. */
+  /** Longest wait for another heavy model to finish. Default 15 min. */
   timeoutMs?: number;
+  /** Leaves the queue at once (rejecting with `LeaseAbortedError`) when it aborts; also checked before `fn` starts. */
+  signal?: AbortSignal;
+}
+
+export class LeaseAbortedError extends Error {
+  readonly code = 'LEASE_ABORTED';
+  constructor(readonly modelId: string) {
+    super(`Stopped while waiting to load ${modelId}.`);
+    this.name = 'LeaseAbortedError';
+  }
 }
 
 export class LeaseTimeoutError extends Error {
@@ -43,6 +56,7 @@ interface Waiter {
   modelId: string;
   grant: () => void;
   timer: ReturnType<typeof setTimeout>;
+  detach: () => void;
 }
 
 export function isHeavyModel(model: ModelDefinition): boolean {
@@ -123,26 +137,39 @@ export class MemoryGovernor {
     const next = this.waiters.shift();
     if (!next) return;
     clearTimeout(next.timer);
+    next.detach();
     this.activeHeavyModel = next.modelId;
     next.grant();
   }
 
-  private waitForTurn(modelId: string, timeoutMs: number): Promise<void> {
+  private waitForTurn(modelId: string, timeoutMs: number, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) return Promise.reject(new LeaseAbortedError(modelId));
     if (this.activeHeavyModel === null && this.waiters.length === 0) {
       this.activeHeavyModel = modelId;
       return Promise.resolve();
     }
     return new Promise<void>((resolve, reject) => {
       const startedAt = this.now();
+      const leave = (): void => {
+        const index = this.waiters.indexOf(waiter);
+        if (index !== -1) this.waiters.splice(index, 1);
+      };
+      const onAbort = (): void => {
+        leave();
+        clearTimeout(waiter.timer);
+        reject(new LeaseAbortedError(modelId));
+      };
       const waiter: Waiter = {
         modelId,
         grant: resolve,
+        detach: () => signal?.removeEventListener('abort', onAbort),
         timer: setTimeout(() => {
-          const index = this.waiters.indexOf(waiter);
-          if (index !== -1) this.waiters.splice(index, 1);
+          leave();
+          waiter.detach();
           reject(new LeaseTimeoutError(modelId, this.now() - startedAt, this.activeHeavyModel));
         }, timeoutMs),
       };
+      signal?.addEventListener('abort', onAbort, { once: true });
       this.waiters.push(waiter);
     });
   }
@@ -156,10 +183,12 @@ export class MemoryGovernor {
   async withLease<T>(model: ModelDefinition, fn: () => Promise<T>, options: WithLeaseOptions = {}): Promise<T> {
     const heavy = isHeavyModel(model);
     if (heavy) {
-      await this.waitForTurn(model.id, options.timeoutMs ?? 120_000);
+      await this.waitForTurn(model.id, options.timeoutMs ?? DEFAULT_LEASE_WAIT_MS, options.signal);
     }
 
     try {
+      // Granted at the very moment the caller stopped: give the lease straight back instead of starting.
+      if (options.signal?.aborted) throw new LeaseAbortedError(model.id);
       const check = this.checker.canRunModel(model);
       if (!check.canRun) {
         throw new LeaseDeniedError(model.id, check.reason ?? 'insufficient memory');

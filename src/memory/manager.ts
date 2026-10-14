@@ -204,6 +204,19 @@ export class MemoryManager {
     return this.profileCollection.find(filter);
   }
 
+  /**
+   * Deletes the profile fact stored under `key`. When it is a vault pointer (or `key` names a vault entry with no
+   * pointer), the encrypted vault entry goes too. Returns whether anything was removed.
+   */
+  async deleteProfileFact(userId: string, key: string): Promise<boolean> {
+    return this.store.transaction(() => {
+      const removedFacts = this.profileCollection.deleteMany({ userId, key });
+      const isVaultEntry = this.vaultCollection.findOne({ userId, tag: key }) !== undefined;
+      const removedVault = isVaultEntry ? this.vaultCollection.deleteOne({ userId, tag: key }) : false;
+      return removedFacts > 0 || removedVault;
+    });
+  }
+
   /** Newest facts first, so when the budget runs out it is the oldest facts that are dropped. */
   async formatProfileForPrompt(userId: string, maxChars = 1500): Promise<string> {
     const facts = newestFirst(await this.getProfileFacts(userId), (fact) => fact.updatedAt);

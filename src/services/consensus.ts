@@ -14,7 +14,7 @@ export interface SourceFinding {
   excerpt: string;
 }
 
-export type ConflictKind = 'numeric' | 'polarity' | 'claim';
+export type ConflictKind = 'numeric' | 'polarity' | 'claim' | 'entity' | 'antonym';
 
 export interface ConsensusConflict {
   kind: ConflictKind;
@@ -26,9 +26,15 @@ export interface ConsensusConflict {
 export interface ClaimEvaluation {
   claim: string;
   status: ClaimStatus;
+  /** 0 when there was nothing to compare (`insufficientSources` is set): a lone source is not agreement. */
   confidence: number;
   sources: string[];
   notes?: string;
+  /**
+   * Why no agreement figure exists: there was no readable source, a single one, or several that share one origin.
+   * Callers show this instead of a percentage.
+   */
+  insufficientSources?: 'none' | 'single_source' | 'same_origin';
   /** Number of independent origins (distinct domains after collapsing near-duplicate text). */
   independentSources?: number;
   /** Mean pairwise content agreement between independent origins, 0..1. */
@@ -50,6 +56,8 @@ export interface NumericFact {
   unit: string;
   /** Content stems in the text window around the number. */
   context: Set<string>;
+  /** A year-like integer: 1998 and 1999 are different facts, so the 10% tolerance does not apply. */
+  exact?: boolean;
 }
 
 const STOPWORDS = new Set(
@@ -67,6 +75,7 @@ const NEGATIONS = new Set([
 ]);
 
 const UNIT_CANON: Record<string, string> = {
+  degree: 'degree', degrees: 'degree', celsius: 'degree', fahrenheit: 'degree', meter: 'm', meters: 'm', metre: 'm', metres: 'm', feet: 'ft', foot: 'ft', inch: 'in', inches: 'in',
   hour: 'hour', hours: 'hour', hr: 'hour', hrs: 'hour',
   minute: 'minute', minutes: 'minute', min: 'minute', mins: 'minute',
   second: 'second', seconds: 'second', sec: 'second', secs: 'second', ms: 'ms', millisecond: 'ms', milliseconds: 'ms',
@@ -85,6 +94,12 @@ const MULTIPLIERS: Record<string, number> = {
   k: 1e3, thousand: 1e3, million: 1e6, mn: 1e6, billion: 1e9, bn: 1e9, trillion: 1e12, lakh: 1e5, lakhs: 1e5, crore: 1e7, crores: 1e7,
 };
 
+/** Unit given to a number that has a multiplier word or no unit at all; such numbers are compared by their context words. */
+const COUNT_UNIT = 'count';
+const PLAIN_UNIT = 'num';
+const PLAIN_MIN_SHARED_CONTEXT = 2;
+const PLAIN_TOLERANCE = 0.02;
+
 const CURRENCY_SYMBOLS: Record<string, string> = { $: '$', '€': '€', '£': '£', '₹': '₹' };
 const NUMERIC_TOLERANCE = 0.1;
 const DUPLICATE_OVERLAP = 0.9;
@@ -92,6 +107,7 @@ const DUPLICATE_MIN_WORDS = 20;
 const MIN_AGREEMENT_TO_VERIFY = 0.2;
 const SENTENCE_OVERLAP_FOR_POLARITY = 0.5;
 const SENTENCE_MIN_SHARED = 3;
+const ENTITY_MIN_SHARED = 2;
 
 function stem(word: string): string {
   let w = word.toLowerCase();
@@ -143,30 +159,38 @@ export function extractNumericFacts(text: string): NumericFact[] {
     if (Number.isNaN(lo) || Number.isNaN(hi)) continue;
 
     let unit = currency ? CURRENCY_SYMBOLS[currency] : '';
+    let scaled = false;
     if (trailing) {
       const word = trailing.toLowerCase();
       const mult = MULTIPLIERS[word];
       if (mult !== undefined) {
         lo *= mult;
         hi *= mult;
+        scaled = true;
       } else if (UNIT_CANON[word] !== undefined && !unit) {
         unit = UNIT_CANON[word];
       }
     }
-    if (!unit) continue;
+    // "14 million residents" keeps its magnitude as a count; a bare number is compared by the words around it.
+    if (!unit) unit = scaled ? COUNT_UNIT : PLAIN_UNIT;
+    // The digits of an identifier ("Z13", "qwen3") are a name, not a quantity.
+    const digitsAt = match.index + whole.indexOf(first);
+    if (unit === PLAIN_UNIT && digitsAt > 0 && /\p{L}/u.test(text[digitsAt - 1])) continue;
     if (lo > hi) [lo, hi] = [hi, lo];
+    const exact = unit === PLAIN_UNIT && lo === hi && Number.isInteger(lo) && lo >= 1000 && lo <= 2100;
 
     const start = Math.max(0, match.index - 60);
     const end = Math.min(text.length, match.index + whole.length + 60);
     const window = text.slice(start, match.index) + ' ' + text.slice(match.index + whole.length, end);
-    facts.push({ lo, hi, unit, context: contentStems(window) });
+    facts.push({ lo, hi, unit, context: contentStems(window), ...(exact ? { exact: true } : {}) });
   }
   return facts;
 }
 
 function factsMatch(a: NumericFact, b: NumericFact): boolean {
-  const slackA = a.hi * (1 + NUMERIC_TOLERANCE);
-  const slackB = b.hi * (1 + NUMERIC_TOLERANCE);
+  const tolerance = a.exact || b.exact ? 0 : a.unit === PLAIN_UNIT ? PLAIN_TOLERANCE : NUMERIC_TOLERANCE;
+  const slackA = a.hi * (1 + tolerance);
+  const slackB = b.hi * (1 + tolerance);
   return a.lo <= slackB && b.lo <= slackA;
 }
 
@@ -184,9 +208,11 @@ function compareFacts(a: NumericFact[], b: NumericFact[], minContextShared: numb
     const as = a.filter((f) => f.unit === unit);
     const bs = b.filter((f) => f.unit === unit);
     const related: Array<[NumericFact, NumericFact]> = [];
-    for (const fa of as) for (const fb of bs) if (sharedCount(fa.context, fb.context) >= minContextShared) related.push([fa, fb]);
+    const needShared = unit === PLAIN_UNIT ? Math.max(minContextShared, PLAIN_MIN_SHARED_CONTEXT) : minContextShared;
+    for (const fa of as) for (const fb of bs) if (sharedCount(fa.context, fb.context) >= needShared) related.push([fa, fb]);
     if (related.length === 0) continue;
     comparable = true;
+    // Judged per unit: two sources agreeing on a model number must not hide that they differ on the gigabytes.
     if (related.some(([fa, fb]) => factsMatch(fa, fb))) {
       agreed = true;
     } else {
@@ -195,7 +221,7 @@ function compareFacts(a: NumericFact[], b: NumericFact[], minContextShared: numb
     }
   }
   if (!comparable) return null;
-  if (conflicts.length > 0 && !agreed) return { agree: false, conflict: conflicts.join('; ') };
+  if (conflicts.length > 0) return { agree: false, conflict: conflicts.join('; ') };
   return { agree: agreed };
 }
 
@@ -244,13 +270,63 @@ function looksLikeQuestion(claim: string): boolean {
   return c.endsWith('?') || /^(what|why|how|who|whom|whose|when|where|which|is|are|does|do|did|can|could|should|will|would)\b/.test(c);
 }
 
+/** Word pairs that mean the opposite of each other; one in each of two same-topic sentences is a contradiction. */
+const ANTONYM_PAIRS: Array<[string[], string[]]> = [
+  [['approved', 'approve', 'approves', 'accepted', 'accept', 'accepts', 'granted'], ['rejected', 'reject', 'rejects', 'declined', 'decline', 'declines', 'refused', 'revoked']],
+  [['allowed', 'allow', 'allows', 'permitted', 'legal', 'lawful'], ['banned', 'ban', 'bans', 'prohibited', 'prohibits', 'forbidden', 'illegal', 'unlawful', 'blocked']],
+  [['increase', 'increased', 'increases', 'rise', 'rose', 'risen', 'rises', 'grew', 'grow', 'grows', 'gained', 'higher', 'more', 'faster', 'larger', 'bigger', 'greater'], ['decrease', 'decreased', 'decreases', 'fall', 'fell', 'fallen', 'falls', 'drop', 'dropped', 'shrank', 'shrink', 'lost', 'lower', 'less', 'fewer', 'slower', 'smaller', 'lesser']],
+  [['true', 'correct', 'accurate', 'confirmed', 'safe', 'secure', 'supports', 'supported', 'successful', 'succeeded', 'passed'], ['false', 'incorrect', 'inaccurate', 'unsafe', 'insecure', 'dangerous', 'opposes', 'opposed', 'broken', 'unsuccessful', 'lose', 'loses', 'defeated', 'failed', 'fails']],
+  [['best', 'largest', 'biggest', 'highest', 'fastest', 'longest', 'tallest', 'maximum'], ['worst', 'smallest', 'lowest', 'slowest', 'shortest', 'minimum']],
+  [['alive', 'living', 'survived', 'available', 'enabled', 'included', 'supported'], ['dead', 'died', 'killed', 'unavailable', 'disabled', 'excluded', 'unsupported']],
+  [['hot', 'warm', 'hotter', 'warmer'], ['cold', 'cool', 'colder', 'cooler']],
+  [['win', 'won', 'victory', 'victorious'], ['lose', 'lost', 'defeat', 'defeated']],
+];
+const ANTONYM_OF: Map<string, Set<string>> = (() => {
+  const map = new Map<string, Set<string>>();
+  const link = (from: string, to: string[]): void => {
+    const set = map.get(from) ?? new Set<string>();
+    for (const word of to) if (word !== from) set.add(word);
+    map.set(from, set);
+  };
+  for (const [left, right] of ANTONYM_PAIRS) {
+    for (const word of left) link(word, right);
+    for (const word of right) link(word, left);
+  }
+  return map;
+})();
+
+interface Entity {
+  word: string;
+  /** The two words before it, lower-cased: two entities fill the same slot when these match. */
+  slot: string;
+}
+
+interface PreparedSentence {
+  stems: Set<string>;
+  negated: boolean;
+  words: Set<string>;
+  entities: Entity[];
+}
+
 interface PreparedFinding {
   source: string;
   domain: string;
   excerpt: string;
   stems: Set<string>;
   facts: NumericFact[];
-  sentences: Array<{ stems: Set<string>; negated: boolean }>;
+  sentences: PreparedSentence[];
+}
+
+function prepareSentence(sentence: string): PreparedSentence {
+  const tokens = sentence.match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) ?? [];
+  const lower = tokens.map((token) => token.toLowerCase());
+  const entities: Entity[] = [];
+  tokens.forEach((token, index) => {
+    const word = lower[index];
+    if (!/^\p{Lu}/u.test(token) || token.length < 2 || STOPWORDS.has(word) || NEGATIONS.has(word)) return;
+    entities.push({ word, slot: lower.slice(Math.max(0, index - 2), index).join(' ') });
+  });
+  return { stems: contentStems(sentence), negated: negationParity(sentence), words: new Set(lower), entities };
 }
 
 function prepare(finding: SourceFinding): PreparedFinding {
@@ -261,7 +337,7 @@ function prepare(finding: SourceFinding): PreparedFinding {
     excerpt,
     stems: contentStems(excerpt),
     facts: extractNumericFacts(excerpt),
-    sentences: sentences(excerpt).map((s) => ({ stems: contentStems(s), negated: negationParity(s) })),
+    sentences: sentences(excerpt).map(prepareSentence),
   };
 }
 
@@ -285,6 +361,39 @@ function findConflict(a: PreparedFinding, b: PreparedFinding): ConsensusConflict
       return { kind: 'polarity', between: [a.source, b.source], detail: 'One source affirms and the other negates the same statement.' };
     }
   }
+  for (const sa of a.sentences) {
+    for (const sb of b.sentences) {
+      const shared = sharedCount(sa.stems, sb.stems);
+      if (shared < ENTITY_MIN_SHARED || overlapCoefficient(sa.stems, sb.stems) < SENTENCE_OVERLAP_FOR_POLARITY) continue;
+      // Two shared topic words are enough when the swapped names sit in the same slot ("capital of Australia is ...").
+      const swap = entitySwap(sa, sb);
+      if (swap) return { kind: 'entity', between: [a.source, b.source], detail: `The sources name different entities for the same statement: ${swap}.` };
+      if (shared < SENTENCE_MIN_SHARED) continue;
+      const opposite = antonymClash(sa, sb);
+      if (opposite) return { kind: 'antonym', between: [a.source, b.source], detail: `The sources use opposite words for the same statement: ${opposite}.` };
+    }
+  }
+  return null;
+}
+
+/** Same-topic sentences that each name a proper noun the other lacks, in the same slot ("located in Paris" / "located in Berlin"). */
+function entitySwap(a: PreparedSentence, b: PreparedSentence): string | null {
+  for (const ea of a.entities) {
+    if (b.words.has(ea.word)) continue;
+    for (const eb of b.entities) {
+      if (a.words.has(eb.word) || ea.slot !== eb.slot || ea.slot === '') continue;
+      return `"${ea.word}" vs "${eb.word}"`;
+    }
+  }
+  return null;
+}
+
+function antonymClash(a: PreparedSentence, b: PreparedSentence): string | null {
+  for (const word of a.words) {
+    const opposites = ANTONYM_OF.get(word);
+    if (!opposites || b.words.has(word)) continue;
+    for (const other of opposites) if (b.words.has(other) && !a.words.has(other)) return `"${word}" vs "${other}"`;
+  }
   return null;
 }
 
@@ -300,11 +409,11 @@ export class ConsensusEngine {
       return {
         claim,
         status: 'UNCONFIRMED',
-        confidence: 0.2,
+        confidence: 0,
         sources: uniqueSources,
         notes: findings.length === 0 ? 'No sources provided to corroborate claim.' : 'Sources contained no readable text.',
         independentSources: 0,
-        agreement: 0,
+        insufficientSources: 'none',
       };
     }
 
@@ -354,7 +463,7 @@ export class ConsensusEngine {
         status: 'VERIFIED',
         confidence: Number(confidence.toFixed(2)),
         sources: uniqueSources,
-        notes: `${independent} independent sources agree (content agreement ${(agreement * 100).toFixed(0)}%).`,
+        notes: `${independent} independent sources cover the same topic (content overlap ${(agreement * 100).toFixed(0)}%) and none contradicts another on a number, a negation, a named entity or an opposite word. This is a lexical check, not a reading of the meaning.`,
         independentSources: independent,
         agreement: Number(agreement.toFixed(2)),
       };
@@ -372,17 +481,18 @@ export class ConsensusEngine {
       };
     }
 
+    // Nothing to compare: one source, or several that are one origin. No agreement figure is invented.
+    const sameOrigin = prepared.length > 1;
     return {
       claim,
       status: 'UNCONFIRMED',
-      confidence: prepared.length > 1 ? 0.45 : 0.55,
+      confidence: 0,
       sources: uniqueSources,
-      notes:
-        prepared.length > 1
-          ? 'All excerpts share one origin (same domain or near-identical text); not independent corroboration.'
-          : 'Single source only; uncorroborated.',
+      notes: sameOrigin
+        ? 'All excerpts share one origin (same domain or near-identical text); not independent corroboration, so there is no agreement figure.'
+        : 'Single source only; uncorroborated, so there is no agreement figure.',
       independentSources: independent,
-      agreement: 0,
+      insufficientSources: sameOrigin ? 'same_origin' : 'single_source',
     };
   }
 
@@ -436,8 +546,10 @@ export class ConsensusEngine {
     const disputed = evaluations.filter((e) => e.status === 'DISPUTED');
     const unconfirmed = evaluations.filter((e) => e.status === 'UNCONFIRMED');
 
-    const totalScore = evaluations.reduce((acc, curr) => acc + curr.confidence, 0);
-    const overallScore = evaluations.length > 0 ? Number((totalScore / evaluations.length).toFixed(2)) : 0;
+    // A claim with nothing to compare against has no agreement figure, so it cannot pull the average anywhere.
+    const comparable = evaluations.filter((e) => e.insufficientSources === undefined);
+    const totalScore = comparable.reduce((acc, curr) => acc + curr.confidence, 0);
+    const overallScore = comparable.length > 0 ? Number((totalScore / comparable.length).toFixed(2)) : 0;
 
     let summary = `Source agreement across ${evaluations.length} claim(s): ${verified.length} verified, ${disputed.length} disputed, ${unconfirmed.length} unconfirmed.`;
     if (disputed.length > 0) {

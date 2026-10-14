@@ -65,6 +65,30 @@ describe('MediaService.describeImage', () => {
     assert.equal(pickVisionModel(['qwen3-vl:8b']), 'qwen3-vl:8b');
   });
 
+  test('an abort signal cancels the in-flight vision request', async () => {
+    const seen = { generating: false, aborted: false };
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+  const url = String(input);
+  if (url.endsWith('/api/tags')) return new Response(JSON.stringify({ models: [{ name: 'llava:13b' }] }), { status: 200 });
+  return new Promise<Response>((_resolve, reject) => {
+    seen.generating = true;
+    init?.signal?.addEventListener('abort', () => {
+      seen.aborted = true;
+      reject(new Error('aborted'));
+    });
+  });
+}) as typeof fetch;
+    const controller = new AbortController();
+    const running = new MediaService().describeImage(PNG, undefined, { fetchImpl, signal: controller.signal });
+    while (!seen.generating) await new Promise((resolve) => setImmediate(resolve));
+    controller.abort('Kill switch engaged');
+    const result = await running;
+    assert.equal(seen.aborted, true);
+    assert.equal(result.available, false);
+    const early = await new MediaService().describeImage(PNG, undefined, { fetchImpl, signal: AbortSignal.abort() });
+    assert.equal(early.available, false);
+  });
+
   test('returns a typed unavailable result when no vision model is installed', async () => {
     const fake = ollamaFake(INSTALLED_TODAY, () => {
       throw new Error('generate must not be called');

@@ -4,6 +4,8 @@
  * and high-intelligence reasoning directives so Jarvis behaves like a top-tier frontier AI.
  */
 
+import { escapeFenceTags } from '../bridge/untrusted.js';
+
 export interface ToolSchemaSummary {
   name: string;
   description: string;
@@ -24,6 +26,10 @@ export interface ReflexHint {
   trigger: string;
   /** Tool names of a previously successful workflow. A suggestion for the planner, never executed automatically. */
   steps: string[];
+  /** Recorded outcomes of that workflow (see `ReflexEvidenceHint`). */
+  worked?: number;
+  failed?: number;
+  /** Present only once there are enough outcomes to call a rate. */
   confidence?: number;
 }
 
@@ -51,7 +57,7 @@ const SAFE_TOOL_NAME = /^[A-Za-z0-9_.:-]{1,64}$/;
  * escaped so the content cannot close the fence early and smuggle instructions outside it.
  */
 export function fenceUntrusted(text: string, label?: string): string {
-  const escaped = text.replace(/<\s*(\/?)\s*untrusted_data/gi, '&lt;$1untrusted_data');
+  const escaped = escapeFenceTags(text);
   const attr = label && SAFE_TOOL_NAME.test(label) ? ` source="${label}"` : '';
   return `<${UNTRUSTED_TAG}${attr}>\n${escaped.trim()}\n</${UNTRUSTED_TAG}>`;
 }
@@ -125,7 +131,11 @@ export class CognitionEngine {
     if (options.reflexHint && options.reflexHint.steps.length > 0) {
       const steps = options.reflexHint.steps.filter((step) => SAFE_TOOL_NAME.test(step));
       if (steps.length > 0) {
-        const confidence = options.reflexHint.confidence !== undefined ? ` (confidence ${(options.reflexHint.confidence * 100).toFixed(0)}%)` : '';
+        const { worked, failed, confidence: rate } = options.reflexHint;
+        const record = worked !== undefined && failed !== undefined ? `worked ${worked} times, failed ${failed}` : '';
+        const success = rate !== undefined ? `${(rate * 100).toFixed(0)}% success` : '';
+        const evidence = [record, success].filter(Boolean).join('; ');
+        const confidence = evidence ? ` (${evidence})` : '';
         sections.push('### Planner Hint:');
         sections.push(`A similar earlier request was handled with this tool sequence${confidence}: ${steps.join(' -> ')}.`);
         sections.push('This is a suggestion only. Check that each step fits the current request, and do not repeat steps that are not needed.');

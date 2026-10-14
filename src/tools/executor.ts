@@ -9,13 +9,13 @@ import type { ActionGateway, KillGuard } from '../devagent/action-gateway.js';
 import { ActionApprovalDeniedError, ActionGatewayForbiddenError } from '../devagent/action-gateway.js';
 import type { ApprovalBroker } from '../security/approvals.js';
 import type { ToolCall, ToolErrorCode, ToolParameterProperty, ToolParameters, ToolResult } from './types.js';
+import { approvalArgsMetadata, formatApprovalAction } from '../security/approval-text.js';
 import { logger } from '../utils/logger.js';
 
 export const DEFAULT_MAX_CALLS_PER_TURN = 5;
 export const DEFAULT_TOOL_TIMEOUT_MS = 30_000;
 export const DEFAULT_MAX_RESULT_CHARS = 16_000;
 const MAX_PARSE_INPUT_CHARS = 200_000;
-const MAX_DESCRIPTION_ARGS_CHARS = 600;
 
 export interface ToolExecutorDeps {
   registry: ToolRegistry;
@@ -32,6 +32,8 @@ export interface ExecuteCallOptions {
   /** Only owner-originated code paths may set this; model output never does. */
   isOwnerExplicitlyApproved?: boolean;
   requestedBy?: string;
+  /** Aborts the running handler (the handler sees it merged into its own context signal) and ends the call as `KILLED`. */
+  signal?: AbortSignal;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -253,11 +255,10 @@ export class ToolExecutor {
 
     const timeoutMs = tool.timeoutMs ?? this.defaultTimeoutMs;
     const maxChars = tool.maxResultChars ?? this.defaultMaxResultChars;
-    let argsPreview = '';
-    try {
-      argsPreview = JSON.stringify(call.args).slice(0, MAX_DESCRIPTION_ARGS_CHARS);
-    } catch {
-      argsPreview = '[unserializable]';
+    // Built from every argument in canonical order, never clamped to a prefix: this is what the owner approves.
+    const action = formatApprovalAction(tool.name, call.args, Object.keys(tool.parameters.properties ?? {}));
+    if (tool.tier >= 2 && action.unshowable) {
+      return this.fail(call, 'DENIED', `Refused before asking the owner: ${action.unshowable}, so the approval prompt could not show the whole action.`);
     }
 
     try {
@@ -266,10 +267,11 @@ export class ToolExecutor {
           tier: tool.tier,
           actionType: 'TOOL_CALL',
           targetId: tool.name,
-          description: `Run tool '${tool.name}' with ${argsPreview}`,
-          metadata: { tool: tool.name, args: argsPreview },
+          description: action.text,
+          // Structured and in the same order as `description`; the gateway redacts secrets before persisting it.
+          metadata: { tool: tool.name, args: approvalArgsMetadata(action) },
         },
-        () => this.runWithTimeout(tool.name, timeoutMs, (signal) => tool.handler(call.args, { signal })),
+        () => this.runWithTimeout(tool.name, timeoutMs, options.signal, (signal) => tool.handler(call.args, { signal })),
         { broker: this.broker, isOwnerExplicitlyApproved: options.isOwnerExplicitlyApproved, requestedBy: options.requestedBy }
       );
 
@@ -282,6 +284,7 @@ export class ToolExecutor {
         err instanceof ActionApprovalDeniedError ? 'DENIED'
         : err instanceof ActionGatewayForbiddenError ? 'FORBIDDEN'
         : err instanceof ToolTimeoutError ? 'TIMEOUT'
+        : err instanceof ToolAbortedError ? 'KILLED'
         : err instanceof Error && err.name === 'KillSwitchEngagedError' ? 'KILLED'
         : 'FAILED';
       return this.fail(call, code, message);
@@ -301,19 +304,39 @@ export class ToolExecutor {
     return results;
   }
 
-  private async runWithTimeout<T>(name: string, timeoutMs: number, run: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  private async runWithTimeout<T>(
+    name: string,
+    timeoutMs: number,
+    external: AbortSignal | undefined,
+    run: (signal: AbortSignal) => Promise<T>
+  ): Promise<T> {
     const controller = new AbortController();
     let timer: NodeJS.Timeout | undefined;
-    const timeout = new Promise<never>((_, reject) => {
+    let onExternalAbort: (() => void) | undefined;
+    const interrupted = new Promise<never>((_, reject) => {
+      // `unref` so a pending tool timeout never keeps the process alive on its own.
       timer = setTimeout(() => {
         controller.abort();
         reject(new ToolTimeoutError(`Tool '${name}' timed out after ${timeoutMs} ms`));
       }, timeoutMs);
+      timer.unref();
+      if (external) {
+        onExternalAbort = () => {
+          controller.abort(external.reason);
+          reject(new ToolAbortedError(`Tool '${name}' was aborted: ${describeReason(external.reason)}`));
+        };
+        if (external.aborted) onExternalAbort();
+        else external.addEventListener('abort', onExternalAbort, { once: true });
+      }
     });
+    // The race below may never reach `interrupted` when the handler settles first.
+    interrupted.catch(() => undefined);
     try {
-      return await Promise.race([run(controller.signal), timeout]);
+      if (external?.aborted) throw new ToolAbortedError(`Tool '${name}' was aborted: ${describeReason(external.reason)}`);
+      return await Promise.race([run(controller.signal), interrupted]);
     } finally {
       clearTimeout(timer);
+      if (external && onExternalAbort) external.removeEventListener('abort', onExternalAbort);
     }
   }
 
@@ -385,4 +408,16 @@ class ToolTimeoutError extends Error {
     super(message);
     this.name = 'ToolTimeoutError';
   }
+}
+
+class ToolAbortedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ToolAbortedError';
+  }
+}
+
+function describeReason(reason: unknown): string {
+  if (typeof reason === 'string') return reason;
+  return reason instanceof Error ? reason.message : 'aborted';
 }

@@ -205,10 +205,13 @@ export async function probeOllama(baseUrl: string, timeoutMs = 8_000): Promise<D
   }
 }
 
-export async function collectDiagnostics(ollamaBaseUrl: string): Promise<Diagnostics> {
+export async function collectDiagnostics(
+  ollamaBaseUrl: string,
+  probes: { gpu?: () => Promise<Diagnostics['gpu']>; ollama?: (baseUrl: string) => Promise<Diagnostics['ollama']> } = {}
+): Promise<Diagnostics> {
   const cpus = os.cpus();
   const memoryUsage = process.memoryUsage();
-  const [gpu, ollama] = await Promise.all([probeGpu(), probeOllama(ollamaBaseUrl)]);
+  const [gpu, ollama] = await Promise.all([(probes.gpu ?? probeGpu)(), (probes.ollama ?? probeOllama)(ollamaBaseUrl)]);
 
   return {
     collectedAt: new Date().toISOString(),

@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { BoardWatcher, parseDirective } from '../src/devagent/board-watcher.js';
 import { OwnActionRegistry } from '../src/devagent/action-registry.js';
 import { ActionGateway } from '../src/devagent/action-gateway.js';
+import type { CommandRunner } from '../src/devagent/command-runner.js';
 
 describe('BoardWatcher & Directives', () => {
   let registry: OwnActionRegistry;
@@ -81,5 +82,53 @@ describe('BoardWatcher & Directives', () => {
     assert.equal(parsed[0].status, 'Concept');
     assert.equal(parsed[0].ticketType, 'Feature');
     assert.equal(parsed[0].title, '[FEAT-002] Phase 0b: Minimal Dev Agent');
+  });
+
+  describe('pollBoard', () => {
+    const fake = () => {
+      const calls: Array<{ file: string; args: readonly string[] }> = [];
+      const run: CommandRunner = async (file, args) => {
+        calls.push({ file, args });
+        return { stdout: JSON.stringify({ items: [{ id: 'PVTI_1', status: 'Concept', content: { number: 7, title: 'T', url: 'u' } }] }), stderr: '' };
+      };
+      return { calls, run };
+    };
+    const open = () => new OwnActionRegistry(':memory:');
+    const gatewayFor = (r: OwnActionRegistry) => new ActionGateway(r, { getFreeMemory: () => 16e9, minFreeMemoryBytes: 1e9 });
+
+    test('runs gh with an argument array (no shell) and records a BOARD_POLL, never a CARD_MOVE', async () => {
+      const reg = open();
+      const { calls, run } = fake();
+      const w = new BoardWatcher({ registry: reg, gateway: gatewayFor(reg), projectNumber: 2, repoOwner: 'aery1803', run });
+      const items = await w.pollBoard();
+      assert.equal(items[0].issueNumber, 7);
+      assert.deepEqual(calls[0], { file: 'gh', args: ['project', 'item-list', '2', '--owner', 'aery1803', '--format', 'json'] });
+      assert.deepEqual(reg.getAllActions().map((a) => [a.actionType, a.status]), [['BOARD_POLL', 'succeeded']]);
+    });
+
+    test('rejects an owner or project number that could inject arguments', async () => {
+      const reg = open();
+      const { calls, run } = fake();
+      for (const [projectNumber, repoOwner] of [[2, 'x; rm -rf /'], [2, '--format'], [0, 'ok'], [Number.NaN, 'ok'], [1.5, 'ok']] as const) {
+        const w = new BoardWatcher({ registry: reg, gateway: gatewayFor(reg), projectNumber, repoOwner, run });
+        await assert.rejects(w.pollBoard(), /Invalid/);
+      }
+      assert.equal(calls.length, 0);
+    });
+
+    test('a failing gh poll is recorded as a failed action', async () => {
+      const reg = open();
+      const w = new BoardWatcher({
+        registry: reg,
+        gateway: gatewayFor(reg),
+        projectNumber: 2,
+        repoOwner: 'aery1803',
+        run: async () => {
+          throw new Error('gh not logged in');
+        },
+      });
+      await assert.rejects(w.pollBoard(), /not logged in/);
+      assert.equal(reg.getAllActions()[0].status, 'failed');
+    });
   });
 });

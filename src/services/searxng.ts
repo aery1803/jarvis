@@ -4,7 +4,7 @@
  */
 
 import { logger } from '../utils/logger.js';
-import { loadExternalSettings } from '../security/credentials.js';
+import { config } from '../config.js';
 
 export interface SearchResult {
   title: string;
@@ -31,7 +31,7 @@ export interface SearXNGClientOptions {
   enableFallback?: boolean;
   /**
    * Allows the live DuckDuckGo fallback, which sends the query text to html.duckduckgo.com.
-   * Defaults to on unless `JARVIS_SEARCH_LIVE_FALLBACK=0`.
+   * Defaults to the owner's `config.searchLiveFallback` (`JARVIS_SEARCH_LIVE_FALLBACK`, off unless set).
    */
   enableLiveFallback?: boolean;
   /** Injectable for tests. */
@@ -40,18 +40,6 @@ export interface SearXNGClientOptions {
 
 const LIVE_FALLBACK_ENGINE = 'duckduckgo-live';
 const MAX_QUERY_CHARS = 300;
-
-function liveFallbackDefault(): boolean {
-  let raw: string | undefined = process.env.JARVIS_SEARCH_LIVE_FALLBACK;
-  if (raw === undefined) {
-    try {
-      raw = loadExternalSettings().JARVIS_SEARCH_LIVE_FALLBACK;
-    } catch {
-      raw = undefined;
-    }
-  }
-  return raw === undefined ? true : !['0', 'false', 'off', 'no'].includes(raw.trim().toLowerCase());
-}
 
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -91,7 +79,7 @@ export class SearXNGClient {
     this.baseUrl = options.baseUrl ?? 'http://127.0.0.1:8080';
     this.timeoutMs = options.timeoutMs ?? 5_000;
     this.enableFallback = options.enableFallback ?? true;
-    this.enableLiveFallback = options.enableLiveFallback ?? liveFallbackDefault();
+    this.enableLiveFallback = options.enableLiveFallback ?? config.searchLiveFallback;
     this.fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init));
   }
 

@@ -211,6 +211,63 @@ describe('OllamaProvider request contract', () => {
   const doneLine =
     '{"response":"","done":true,"prompt_eval_count":1200,"eval_count":50,"total_duration":3000000000,"load_duration":100000000,"prompt_eval_duration":500000000,"eval_duration":2000000000}\n';
 
+  test('done_reason "length" is reported as a truncated generation; "stop" is not', async () => {
+    const lengthLine = '{"response":"","done":true,"done_reason":"length","prompt_eval_count":10,"eval_count":2048}\n';
+    const stopLine = '{"response":"","done":true,"done_reason":"stop","prompt_eval_count":10,"eval_count":12}\n';
+    for (const [line, truncated] of [[lengthLine, true], [stopLine, false]] as const) {
+      await withServer(
+        (_req, _body, res) => {
+          res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+          res.write('{"response":"The steps are","done":false}\n');
+          res.end(line);
+        },
+        async (baseUrl) => {
+          const provider = new OllamaProvider({ baseUrl, model: 'test:1b' });
+          const usages: GenerationUsage[] = [];
+          for await (const _c of provider.generateStream('p', { maxTokens: 2048, onUsage: (u) => usages.push(u) })) {
+            // drain
+          }
+          assert.equal(usages[0].truncated, truncated ? true : undefined);
+          assert.equal(usages[0].doneReason, truncated ? 'length' : 'stop');
+        }
+      );
+    }
+  });
+
+  test('a done line with no counts but done_reason "length" still reports the truncation', async () => {
+    await withServer(
+      (_req, _body, res) => {
+        res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+        res.end('{"response":"cut","done":false}\n{"response":"","done":true,"done_reason":"length"}\n');
+      },
+      async (baseUrl) => {
+        const usages: GenerationUsage[] = [];
+        for await (const _c of new OllamaProvider({ baseUrl, model: 'test:1b' }).generateStream('p', { onUsage: (u) => usages.push(u) })) {
+          // drain
+        }
+        assert.equal(usages.length, 1);
+        assert.equal(usages[0].truncated, true);
+        assert.equal(usages[0].completionTokens, 0, 'no counts are invented');
+      }
+    );
+  });
+
+  test('without a done_reason, producing as many tokens as the limit allowed counts as truncated', async () => {
+    await withServer(
+      (_req, _body, res) => {
+        res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+        res.end('{"response":"x","done":false}\n{"response":"","done":true,"prompt_eval_count":5,"eval_count":300}\n');
+      },
+      async (baseUrl) => {
+        const usages: GenerationUsage[] = [];
+        for await (const _c of new OllamaProvider({ baseUrl, model: 'test:1b' }).generateStream('p', { maxTokens: 300, onUsage: (u) => usages.push(u) })) {
+          // drain
+        }
+        assert.equal(usages[0].truncated, true);
+      }
+    );
+  });
+
   test('generateStream sends num_ctx (default and caller-supplied) and reports real usage from the done line', async () => {
     await withServer(
       (_req, _body, res) => {
@@ -220,10 +277,11 @@ describe('OllamaProvider request contract', () => {
       },
       async (baseUrl, seen) => {
         const provider = new OllamaProvider({ baseUrl, model: 'test:1b' });
-        let usage: GenerationUsage | undefined;
-        for await (const _c of provider.generateStream('p', { onUsage: (u) => (usage = u) })) {
+        const usages: GenerationUsage[] = [];
+        for await (const _c of provider.generateStream('p', { onUsage: (u) => usages.push(u) })) {
           // drain
         }
+        const usage = usages[0];
         assert.equal(JSON.parse(seen[0].body).options.num_ctx, DEFAULT_CONTEXT_TOKENS);
         assert.deepEqual(usage, {
           model: 'test:1b',
@@ -281,8 +339,9 @@ describe('OllamaProvider request contract', () => {
       },
       async (baseUrl, seen) => {
         const provider = new OllamaProvider({ baseUrl, model: 'test:1b' });
-        let usage: GenerationUsage | undefined;
-        const out = await provider.chat([{ role: 'user', content: 'hi' }], { contextTokens: 8192, onUsage: (u) => (usage = u) });
+        const usages: GenerationUsage[] = [];
+        const out = await provider.chat([{ role: 'user', content: 'hi' }], { contextTokens: 8192, onUsage: (u) => usages.push(u) });
+        const usage = usages[0];
         assert.equal(out, 'ok');
         assert.equal(JSON.parse(seen[0].body).options.num_ctx, 8192);
         assert.equal(usage?.promptTokens, 7);

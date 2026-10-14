@@ -5,6 +5,11 @@ export function stripControlChars(text: string): string {
   return text.replace(CONTROL_CHARS, '');
 }
 
+/** Entity-escapes any `<untrusted_data` / `</untrusted_data` (whitespace variants included) so text cannot close a fence early. */
+export function escapeFenceTags(text: string): string {
+  return text.replace(/<\s*(\/?)\s*untrusted_data/gi, '&lt;$1untrusted_data');
+}
+
 /**
  * Wraps untrusted text in an `<untrusted_data>` block for a prompt. Any literal `<untrusted_data` or
  * `</untrusted_data` inside the content is entity-escaped so the payload cannot close the fence early.
@@ -14,6 +19,6 @@ export function fenceUntrusted(source: string, content: string, attrs: Record<st
   const attrText = Object.entries({ source, ...attrs })
     .map(([key, value]) => ` ${key.replace(/[^a-zA-Z0-9_-]/g, '')}="${safeAttr(value)}"`)
     .join('');
-  const escaped = stripControlChars(content).replace(/<(\/?)untrusted_data/gi, '&lt;$1untrusted_data');
+  const escaped = escapeFenceTags(stripControlChars(content));
   return `<untrusted_data${attrText}>\n${escaped}\n</untrusted_data>`;
 }

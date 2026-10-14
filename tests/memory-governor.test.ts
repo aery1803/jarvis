@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { CapabilityChecker } from '../src/orchestration/capability.js';
-import { MemoryGovernor, LeaseTimeoutError, LeaseDeniedError } from '../src/orchestration/governor.js';
+import { MemoryGovernor, LeaseTimeoutError, LeaseDeniedError, LeaseAbortedError, DEFAULT_LEASE_WAIT_MS } from '../src/orchestration/governor.js';
 import type { ModelDefinition } from '../src/orchestration/registry.js';
 
 const GIB = 1024 * 1024 * 1024;
@@ -73,5 +73,48 @@ describe('MemoryGovernor', () => {
     await g.withLease(def('s', 1), async () => { now += 10; });
     await g.withLease(def('s', 1), async () => 1);
     assert.deepEqual(sleeps, [500]);
+  });
+
+  test('the default wait for a heavy model is long enough for a heavy turn (15 minutes)', () => {
+    assert.equal(DEFAULT_LEASE_WAIT_MS, 15 * 60 * 1000);
+  });
+
+  test('a queued waiter leaves the queue at once when its signal aborts, and the next waiter is still served', async () => {
+    const g = governor();
+    let releaseA!: () => void;
+    const a = g.withLease(def('a', 10), () => new Promise<void>((r) => (releaseA = r)));
+    const controller = new AbortController();
+    const b = g.withLease(def('b', 10), async () => 'b-ran', { signal: controller.signal });
+    const c = g.withLease(def('c', 10), async () => 'c-ran');
+    await new Promise((r) => setImmediate(r));
+    assert.equal(g.getQueueLength(), 2);
+    controller.abort();
+    await assert.rejects(b, LeaseAbortedError);
+    assert.equal(g.getQueueLength(), 1, 'the aborted waiter no longer occupies a slot');
+    releaseA();
+    assert.equal(await c, 'c-ran');
+    await a;
+    assert.equal(g.getActiveHeavyModel(), null);
+  });
+
+  test('a signal that is already aborted never queues, and one that aborts as the lease is granted gives it back', async () => {
+    const g = governor();
+    const done = new AbortController();
+    done.abort();
+    await assert.rejects(g.withLease(def('a', 10), async () => 1, { signal: done.signal }), LeaseAbortedError);
+    assert.equal(g.getActiveHeavyModel(), null);
+
+    let releaseA!: () => void;
+    const holder = g.withLease(def('a', 10), () => new Promise<void>((r) => (releaseA = r)));
+    const late = new AbortController();
+    let ran = false;
+    const waiter = g.withLease(def('b', 10), async () => { ran = true; }, { signal: late.signal });
+    await new Promise((r) => setImmediate(r));
+    releaseA();
+    late.abort();
+    await holder;
+    await waiter.catch(() => undefined);
+    assert.equal(ran && late.signal.aborted && g.getActiveHeavyModel() !== null, false, 'an aborted waiter never leaves the lease held');
+    assert.equal(g.getActiveHeavyModel(), null);
   });
 });

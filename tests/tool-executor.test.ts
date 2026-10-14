@@ -176,7 +176,7 @@ describe('ToolExecutor', () => {
       const result = await withBroker.executeCall({ id: 'c', name: 'shell', args: { a: 4, b: 5 } });
       assert.equal(result.result, 9);
       assert.match(described, /shell/);
-      assert.match(described, /"a":4/);
+      assert.match(described, /^Tool: shell\na: 4\nb: 5$/);
     });
 
     test('the owner pre-approval flag lets a Tier 2 tool run, model output cannot set it', async () => {
@@ -237,6 +237,43 @@ describe('ToolExecutor', () => {
       assert.equal(result.errorCode, 'TIMEOUT');
       assert.equal(aborted, true);
       assert.equal(ownActionRegistry.getAllActions()[0].status, 'failed');
+    });
+
+    test('an external signal aborts a running handler and ends the call as KILLED', async () => {
+      let handlerSignal: AbortSignal | undefined;
+      registry.registerTool({
+        ...sumTool,
+        name: 'long',
+        parameters: { type: 'object', properties: {} },
+        handler: (_args, ctx) =>
+          new Promise(() => {
+            handlerSignal = ctx?.signal;
+          }),
+      });
+      const turn = new AbortController();
+      const running = executor.executeCall({ id: 'c', name: 'long', args: {} }, { signal: turn.signal });
+      await new Promise((resolve) => setImmediate(resolve));
+      turn.abort('Kill switch engaged: test');
+      const result = await running;
+      assert.equal(result.errorCode, 'KILLED');
+      assert.match(result.error ?? '', /Kill switch engaged: test/);
+      assert.equal(handlerSignal?.aborted, true);
+    });
+
+    test('an already-aborted signal never starts the handler', async () => {
+      let started = false;
+      registry.registerTool({
+        ...sumTool,
+        name: 'never',
+        parameters: { type: 'object', properties: {} },
+        handler: async () => {
+          started = true;
+          return 1;
+        },
+      });
+      const result = await executor.executeCall({ id: 'c', name: 'never', args: {} }, { signal: AbortSignal.abort('stop') });
+      assert.equal(result.errorCode, 'KILLED');
+      assert.equal(started, false);
     });
 
     test('a throwing tool becomes a FAILED result', async () => {

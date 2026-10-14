@@ -51,6 +51,7 @@ export class ApprovalBroker {
   private readonly timeoutMs: number;
   private readonly auditSink?: (event: ApprovalAuditEvent) => Promise<void> | void;
   private notifier: ApprovalNotifier | null = null;
+  private displaced: ApprovalNotifier | null = null;
   private readonly entries = new Map<string, PendingEntry>();
 
   constructor(options: ApprovalBrokerOptions = {}) {
@@ -59,7 +60,18 @@ export class ApprovalBroker {
   }
 
   public setNotifier(notifier: ApprovalNotifier): void {
+    if (this.notifier !== null && this.notifier !== notifier) this.displaced = this.notifier;
     this.notifier = notifier;
+  }
+
+  /**
+   * Removes `expected` only if it is still the notifier, so a stopped channel cannot remove one registered after it.
+   * The channel it displaced (the web UI's passive one) is put back; with none, later requests are denied as unreachable.
+   */
+  public clearNotifier(expected: ApprovalNotifier): void {
+    if (this.notifier !== expected) return;
+    this.notifier = this.displaced;
+    this.displaced = null;
   }
 
   public hasNotifier(): boolean {

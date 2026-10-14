@@ -15,6 +15,7 @@ export interface ChatMessage {
 export const DEFAULT_CONTEXT_TOKENS = 16_384;
 
 const MIN_CONTEXT_TOKENS = 512;
+const DEFAULT_MAX_OUTPUT_TOKENS = 1024;
 const DEFAULT_CHAT_TIMEOUT_MS = 300_000;
 const DEFAULT_LIST_TIMEOUT_MS = 5_000;
 const DEFAULT_PULL_TIMEOUT_MS = 3 * 60 * 60 * 1000;
@@ -32,6 +33,10 @@ export interface GenerationUsage {
   loadDurationMs?: number;
   /** completionTokens / evalDuration; absent when the backend gave no eval duration. */
   tokensPerSec?: number;
+  /** Ollama `done_reason` of the final line (`stop`, `length`, `load`...); absent when the backend sent none. */
+  doneReason?: string;
+  /** True when generation stopped at the output limit (`done_reason: 'length'`), so the reply is cut off mid-thought. */
+  truncated?: boolean;
 }
 
 export interface GenerateOptions {
@@ -101,6 +106,7 @@ const OllamaStatsShape = {
 const OllamaStreamLineSchema = z.object({
   response: z.string().optional(),
   done: z.boolean().optional(),
+  done_reason: z.string().optional(),
   error: z.string().optional(),
   ...OllamaStatsShape,
 });
@@ -133,8 +139,10 @@ interface OllamaStats {
   eval_duration?: number;
 }
 
-function usageFromOllama(model: string, stats: OllamaStats): GenerationUsage | null {
-  if (stats.prompt_eval_count === undefined && stats.eval_count === undefined) return null;
+function usageFromOllama(model: string, stats: OllamaStats, doneReason?: string, maxTokens?: number): GenerationUsage | null {
+  const truncated = doneReason === 'length' || (maxTokens !== undefined && doneReason === undefined && (stats.eval_count ?? 0) >= maxTokens);
+  // A final line without counts is still reported when it says the reply was cut off: the caller must learn that.
+  if (stats.prompt_eval_count === undefined && stats.eval_count === undefined && !truncated) return null;
   const completionTokens = stats.eval_count ?? 0;
   const evalDurationMs = nsToMs(stats.eval_duration);
   return {
@@ -149,6 +157,8 @@ function usageFromOllama(model: string, stats: OllamaStats): GenerationUsage | n
       stats.eval_duration && stats.eval_duration > 0
         ? Math.round((completionTokens / (stats.eval_duration / 1e9)) * 100) / 100
         : undefined,
+    ...(doneReason !== undefined ? { doneReason } : {}),
+    ...(truncated ? { truncated: true } : {}),
   };
 }
 
@@ -256,7 +266,7 @@ export class OllamaProvider implements LLMProvider {
   private buildOptions(options: GenerateOptions): Record<string, unknown> {
     return {
       temperature: options.temperature ?? 0.7,
-      num_predict: options.maxTokens ?? 1024,
+      num_predict: options.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
       num_ctx: resolveContextTokens(options.contextTokens, this.defaultContextTokens),
       stop: options.stop,
     };
@@ -315,7 +325,7 @@ export class OllamaProvider implements LLMProvider {
         throw new Error(`Ollama stream error: ${parsed.data.error}`);
       }
       if (parsed.data.done) {
-        emitUsage(options, usageFromOllama(this.model, parsed.data));
+        emitUsage(options, usageFromOllama(this.model, parsed.data, parsed.data.done_reason, options.maxTokens ?? DEFAULT_MAX_OUTPUT_TOKENS));
         return;
       }
       if (parsed.data.response) {
@@ -742,7 +752,7 @@ export class MockLLMProvider implements LLMProvider {
   }
 
   public async listModels(): Promise<string[]> {
-    return [this.model, 'mock-qwen2.5-coder:7b'];
+    return [this.model, 'mock-coder:7b'];
   }
 
   public async pullModel(_name: string): Promise<boolean> {

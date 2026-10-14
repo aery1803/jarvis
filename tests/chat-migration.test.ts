@@ -118,6 +118,16 @@ describe('migrateLegacyChatDb', () => {
     assert.equal(codingMessages[0].meta?.partial, true);
   });
 
+  test('a legacy session without a model reports the configured default, never qwen2.5:7b', async () => {
+    writeLegacyChatDb(legacyDbPath, {
+      sessions: [{ id: 'session-nomodel', title: 'Old chat', createdAt: '2026-09-03T08:00:00.000Z', updatedAt: '2026-09-03T08:00:00.000Z' }],
+      messages: [],
+    });
+    await migrateLegacyChatDb({ legacyDbPath, store, sessionManager: sessions, userId: OWNER_ID });
+    const web = new ChatStore(sessions, OWNER_ID, { defaultModel: 'qwen3:8b' });
+    assert.equal((await web.getSession('session-nomodel'))?.model, 'qwen3:8b');
+  });
+
   test('runs once: a second run neither duplicates rows nor restores sessions deleted since', async () => {
     writeLegacyChatDb(legacyDbPath, { sessions: legacySessions, messages: legacyMessages });
     await migrateLegacyChatDb({ legacyDbPath, store, sessionManager: sessions, userId: OWNER_ID });

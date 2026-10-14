@@ -33,6 +33,23 @@ describe('T1 owner profile', () => {
     memory = new MemoryManager(new DocumentStore(':memory:'), { now: () => clock });
   });
 
+  test('deleteProfileFact removes a plain fact, and a vault pointer takes its encrypted entry with it', async () => {
+    await memory.setProfileFact('owner', 'nickname', 'Av');
+    assert.equal(await memory.deleteProfileFact('owner', 'nickname'), true);
+    assert.equal(await memory.deleteProfileFact('owner', 'nickname'), false);
+
+    const stored = await memory.rememberFact('owner', { key: 'wifi password', value: 'correct-horse-battery-staple-9!' });
+    assert.equal(stored.stored, 'vault');
+    assert.deepEqual(await memory.listSensitiveTags('owner'), ['wifi password']);
+    assert.equal(await memory.deleteProfileFact('owner', 'wifi password'), true);
+    assert.deepEqual(await memory.listSensitiveTags('owner'), []);
+    assert.deepEqual(await memory.getProfileFacts('owner'), []);
+
+    await memory.setProfileFact('other', 'nickname', 'keep');
+    assert.equal(await memory.deleteProfileFact('owner', 'nickname'), false, 'another user\'s fact is untouched');
+    assert.equal((await memory.getProfileFacts('other')).length, 1);
+  });
+
   test('keeps the newest facts and drops the oldest when the budget is exceeded', async () => {
     for (let i = 0; i < 30; i++) {
       clock += 1000;
@@ -200,9 +217,10 @@ describe('T3 episodic memory in context', () => {
   });
 
   test('includes the most relevant recent episodes as a Relevant Past Tasks section', async () => {
-    await memory.recordEpisode({ userId: 'owner', sessionId: 's0', goal: 'Benchmark Ollama models on Vulkan', steps: [], outcome: 'qwen3:8b reached 41 t/s', feedback: 'positive' });
-    await memory.recordEpisode({ userId: 'owner', sessionId: 's0', goal: 'Bake sourdough bread', steps: [], outcome: 'Use a dutch oven' });
+    await memory.recordEpisode({ userId: 'owner', sessionId: 's1', goal: 'Benchmark Ollama models on Vulkan', steps: [], outcome: 'qwen3:8b reached 41 t/s', feedback: 'positive' });
+    await memory.recordEpisode({ userId: 'owner', sessionId: 's1', goal: 'Bake sourdough bread', steps: [], outcome: 'Use a dutch oven' });
     await memory.recordEpisode({ userId: 'other', sessionId: 'x', goal: 'Benchmark Ollama models secretly', steps: [], outcome: 'FOREIGN-OUTCOME' });
+    await memory.recordEpisode({ userId: 'owner', sessionId: 's0', goal: 'Benchmark Ollama models in another chat', steps: [], outcome: 'OTHER-SESSION-OUTCOME' });
     const ctx = await buildConversationContext({ memory, userId: 'owner', sessionId: 's1', prompt: 'Please benchmark the Ollama models again' });
     assert.ok(ctx.includedTiers.includes('T3'));
     assert.ok(ctx.text.includes('### Relevant Past Tasks'));
@@ -210,6 +228,7 @@ describe('T3 episodic memory in context', () => {
     assert.ok(ctx.text.includes('[owner liked this]'));
     assert.ok(!ctx.text.includes('sourdough'));
     assert.ok(!ctx.text.includes('FOREIGN-OUTCOME'));
+    assert.ok(!ctx.text.includes('OTHER-SESSION-OUTCOME'), "another session's tasks must not leak into this prompt");
   });
 
   test('omits the section when nothing overlaps with the prompt', async () => {
@@ -280,7 +299,7 @@ describe('clampText and the prompt budget', () => {
     const memory = new MemoryManager(new DocumentStore(':memory:'));
     await memory.setProfileFact('owner', 'colour', 'green');
     await memory.saveSessionSummary('owner', 'other', 'S'.repeat(500), 6);
-    await memory.recordEpisode({ userId: 'owner', sessionId: 'o', goal: 'research kubernetes clusters', steps: [], outcome: 'done' });
+    await memory.recordEpisode({ userId: 'owner', sessionId: 's', goal: 'research kubernetes clusters', steps: [], outcome: 'done' });
     await memory.saveKnowledge({ userId: 'owner', title: 'k8s', content: 'K'.repeat(700), tags: ['kubernetes'] });
     const turns = Array.from({ length: 6 }, (_, i) => ({ role: 'user' as const, content: `turn-${i} ${'t'.repeat(300)}` }));
     const ctx = await buildConversationContext({ memory, userId: 'owner', sessionId: 's', prompt: 'research kubernetes clusters', turns });

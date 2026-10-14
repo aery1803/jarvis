@@ -40,6 +40,26 @@ export function parseDumpsysBattery(output: string): { batteryLevel: number; isC
   return { batteryLevel: Math.min(100, Number(level[1])), isCharging };
 }
 
+/** A listed device whose battery was never read: no battery, no charging state and no sync time, with the reason. */
+function unreadableDevice(serial: string, state: string): MobileDeviceStatus {
+  const reason =
+    state === 'device'
+      ? 'adb listed the device but `dumpsys battery` returned no readable battery level'
+      : state === 'unauthorized'
+        ? 'the device has not authorised this computer for USB debugging'
+        : `the device is in adb state '${state}'`;
+  return {
+    deviceId: serial,
+    platform: 'android',
+    batteryLevel: null,
+    isCharging: null,
+    connected: false,
+    lastSyncTime: null,
+    state: state === 'device' ? 'unreadable' : state,
+    unavailableReason: reason,
+  };
+}
+
 /**
  * Read-only Android transport over `adb`. Runs only `adb devices` and `adb -s <serial> shell dumpsys battery`;
  * when adb is missing or fails it reports no devices rather than inventing any.
@@ -65,9 +85,7 @@ export class AdbTransport implements MobileTransport {
     const statuses: MobileDeviceStatus[] = [];
     for (const { serial, state } of parseAdbDevices(output)) {
       const status = state === 'device' ? await this.getStatus(serial) : null;
-      statuses.push(
-        status ?? { deviceId: serial, platform: 'android', batteryLevel: 0, isCharging: false, connected: false, lastSyncTime: new Date().toISOString() }
-      );
+      statuses.push(status ?? unreadableDevice(serial, state));
     }
     return statuses;
   }
@@ -78,7 +96,7 @@ export class AdbTransport implements MobileTransport {
       const output = await this.runner(this.adbPath, ['-s', deviceId, 'shell', 'dumpsys', 'battery'], this.timeoutMs);
       const battery = parseDumpsysBattery(output);
       if (!battery) return null;
-      return { deviceId, platform: 'android', ...battery, connected: true, lastSyncTime: new Date().toISOString() };
+      return { deviceId, platform: 'android', ...battery, connected: true, lastSyncTime: new Date().toISOString(), state: 'device' };
     } catch {
       return null;
     }

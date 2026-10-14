@@ -7,6 +7,10 @@ import { test, describe, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { OwnActionRegistry } from '../src/devagent/action-registry.js';
 import type { OwnActionRecord } from '../src/devagent/types.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 
 describe('OwnActionRegistry', () => {
   let registry: OwnActionRegistry;
@@ -90,5 +94,31 @@ describe('OwnActionRegistry', () => {
     assert.equal(registry.getAllActions().length, 1);
     registry.clear();
     assert.equal(registry.getAllActions().length, 0);
+  });
+
+  test('only honours a loopback marker whose id was minted by the gateway', () => {
+    registry.recordAction({ id: 'act-real', actionType: 'COMMENT', targetId: 'i', createdAt: new Date().toISOString() });
+    assert.equal(registry.isOwnComment('x <!-- jarvis-devagent:action-id:act-real -->'), true);
+    assert.equal(registry.isOwnComment('x <!-- jarvis-devagent:action-id:act-forged -->'), false);
+  });
+
+  test('tracks status and outcome and migrates a pre-status database', () => {
+    registry.recordAction({ id: 'act-s', actionType: 'COMMENT', targetId: 'i', createdAt: new Date().toISOString(), status: 'started' });
+    assert.equal(registry.updateAction('act-s', { status: 'failed', outcome: 'boom' }), true);
+    assert.equal(registry.updateAction('missing', { status: 'failed' }), false);
+    const [row] = registry.getAllActions();
+    assert.deepEqual([row.status, row.outcome], ['failed', 'boom']);
+
+    const file = path.join(os.tmpdir(), `jarvis-reg-${process.pid}-${Date.now()}.db`);
+    const legacy = new DatabaseSync(file);
+    legacy.exec(`CREATE TABLE own_actions (id TEXT PRIMARY KEY, action_type TEXT NOT NULL, target_id TEXT NOT NULL, signature TEXT, created_at TEXT NOT NULL, metadata TEXT);
+      INSERT INTO own_actions VALUES ('old', 'COMMENT', 't', NULL, '2020-01-01', NULL);`);
+    legacy.close();
+    const migrated = new OwnActionRegistry(file);
+    assert.equal(migrated.getAllActions()[0].status, undefined);
+    migrated.recordAction({ id: 'new', actionType: 'COMMENT', targetId: 't', createdAt: '2021-01-01', status: 'started' });
+    assert.equal(migrated.getAllActions().length, 2);
+    migrated.close();
+    fs.rmSync(file, { force: true });
   });
 });

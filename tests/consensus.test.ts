@@ -124,13 +124,106 @@ describe('ConsensusEngine', () => {
     assert.notEqual(engine.evaluateClaim('Is battery life 18 hours?', src).status, 'DISPUTED');
   });
 
-  test('empty findings and empty excerpts are unconfirmed at low confidence', () => {
+  test('empty findings and empty excerpts are unconfirmed with no agreement figure', () => {
     assert.equal(engine.evaluateClaim('x', []).status, 'UNCONFIRMED');
-    assert.ok(engine.evaluateClaim('x', [{ source: 'a.com', excerpt: '  ' }]).confidence <= 0.2);
+    const blank = engine.evaluateClaim('x', [{ source: 'a.com', excerpt: '  ' }]);
+    assert.equal(blank.confidence, 0);
+    assert.equal(blank.insufficientSources, 'none');
   });
 
   test('the report summary does not claim high consensus when nothing was verified', () => {
     const report = engine.buildReport([{ claim: 'x', sources: [{ source: 'a.com', excerpt: 'only one source here' }] }]);
     assert.match(report.summary, /No claim was independently corroborated/);
+  });
+
+  describe('contradictions that share every topic word', () => {
+    const disputed = (claim: string, a: string, b: string, kind: string): void => {
+      const result = engine.evaluateClaim(claim, [
+        { source: 'https://a.example.com/x', excerpt: a },
+        { source: 'https://b.example.org/y', excerpt: b },
+      ]);
+      assert.equal(result.status, 'DISPUTED', `${a} / ${b}`);
+      assert.ok((result.conflicts ?? []).some((c) => c.kind === kind), `${kind} conflict expected for: ${a} / ${b}; got ${JSON.stringify(result.conflicts)}`);
+    };
+
+    test('an entity swap in the same slot is disputed', () => {
+      disputed('Where is the Eiffel Tower?', 'The Eiffel Tower is located in Paris France.', 'The Eiffel Tower is located in Berlin Germany.', 'entity');
+      disputed('Capital of Australia', 'The capital of Australia is Canberra.', 'The capital of Australia is Sydney.', 'entity');
+    });
+
+    test('opposite words about the same statement are disputed', () => {
+      disputed('FDA decision', 'The drug was approved by the FDA last year.', 'The drug was rejected by the FDA last year.', 'antonym');
+      disputed('Chip speed', 'The new chip is faster than the old model in every test.', 'The new chip is slower than the old model in every test.', 'antonym');
+    });
+
+    test('a magnitude word keeps the fact: 14 million and 37 million differ', () => {
+      disputed('Tokyo population', 'Tokyo has 14 million residents.', 'Tokyo has 37 million residents.', 'numeric');
+      const same = engine.evaluateClaim('Tokyo population', [
+        { source: 'https://a.example.com/x', excerpt: 'Tokyo has 14 million residents.' },
+        { source: 'https://b.example.org/y', excerpt: 'Tokyo has 14,000,000 residents.' },
+      ]);
+      assert.notEqual(same.status, 'DISPUTED');
+    });
+
+    test('degrees are a unit, and a unit-less number is compared by the words around it', () => {
+      disputed('Boiling point', 'Water boils at 100 degrees at sea level.', 'Water boils at 90 degrees at sea level.', 'numeric');
+      disputed('Founding', 'The company was founded in 1998 in Seattle.', 'The company was founded in 1999 in Seattle.', 'numeric');
+    });
+
+    test('the digits of a name are not a quantity, and a paraphrase with extra detail is not a swap', () => {
+      const result = engine.evaluateClaim('Z13 memory', [
+        { source: 'https://a.example.com/x', excerpt: 'The Z13 ships with 32 GB of memory.' },
+        { source: 'https://b.example.org/y', excerpt: 'Memory on the Z13 is 32 GB.' },
+      ]);
+      assert.equal(result.status, 'VERIFIED');
+      const detail = engine.evaluateClaim('Paris', [
+        { source: 'https://a.example.com/x', excerpt: 'Paris is the capital of France, said Macron.' },
+        { source: 'https://b.example.org/y', excerpt: 'Paris is the capital of France.' },
+      ]);
+      assert.notEqual(detail.status, 'DISPUTED');
+    });
+
+    test('a VERIFIED verdict describes a lexical check, not agreement on meaning', () => {
+      const result = engine.evaluateClaim('Zen 5 cores', [
+        { source: 'https://a.example.com/x', excerpt: 'The Ryzen AI Max+ 395 uses Zen 5 cores.' },
+        { source: 'https://b.example.org/y', excerpt: 'Zen 5 cores power the Ryzen AI Max+ 395 chip.' },
+      ]);
+      assert.equal(result.status, 'VERIFIED');
+      assert.match(result.notes ?? '', /lexical check/);
+    });
+  });
+
+  describe('no agreement figure without something to compare', () => {
+    test('a single source has confidence 0 and says why, instead of a made-up 55%', () => {
+      const result = engine.evaluateClaim('Zen 5 powers it', [{ source: 'https://a.example.com/x', excerpt: 'It uses Zen 5 cores.' }]);
+      assert.equal(result.status, 'UNCONFIRMED');
+      assert.equal(result.confidence, 0);
+      assert.equal(result.insufficientSources, 'single_source');
+      assert.equal(result.agreement, undefined);
+    });
+
+    test('several pages from one origin are reported as same_origin with confidence 0', () => {
+      const result = engine.evaluateClaim('Zen 5 powers it', [
+        { source: 'https://www.example.com/a', excerpt: 'It uses Zen 5 cores.' },
+        { source: 'https://blog.example.com/b', excerpt: 'Zen 5 cores are used.' },
+      ]);
+      assert.equal(result.confidence, 0);
+      assert.equal(result.insufficientSources, 'same_origin');
+    });
+
+    test('a comparable evaluation carries no insufficientSources flag, and the report average skips the others', () => {
+      const report = engine.buildReport([
+        { claim: 'alone', sources: [{ source: 'https://a.example.com/x', excerpt: 'only one source here' }] },
+        {
+          claim: 'Zen 5 cores',
+          sources: [
+            { source: 'https://a.example.com/x', excerpt: 'The Ryzen AI Max+ 395 uses Zen 5 cores.' },
+            { source: 'https://b.example.org/y', excerpt: 'Zen 5 cores power the Ryzen AI Max+ 395 chip.' },
+          ],
+        },
+      ]);
+      assert.equal(report.evaluations[1].insufficientSources, undefined);
+      assert.equal(report.overallScore, report.evaluations[1].confidence);
+    });
   });
 });

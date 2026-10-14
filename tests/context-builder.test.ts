@@ -160,6 +160,50 @@ describe('summarizeAndStoreSession', () => {
   });
 });
 
+describe('summaries of deleted sessions and the summarizer request', () => {
+  test('a summary whose session no longer exists is not injected when the live sessions are known', async () => {
+    const memory = new MemoryManager(new DocumentStore(':memory:'));
+    await memory.saveSessionSummary('owner', 'gone', 'The owner talked about a secret project in the deleted chat.', 6);
+    await memory.saveSessionSummary('owner', 'alive', 'The owner talked about gardening in another chat.', 6);
+    const unfiltered = await buildConversationContext({ memory, userId: 'owner', sessionId: 'now', prompt: 'hello' });
+    assert.ok(unfiltered.text.includes('secret project'), 'without the filter both are injected');
+    const filtered = await buildConversationContext({ memory, userId: 'owner', sessionId: 'now', prompt: 'hello', liveSessionIds: new Set(['alive', 'now']) });
+    assert.ok(!filtered.text.includes('secret project'));
+    assert.ok(filtered.text.includes('gardening'));
+  });
+
+  test('the summary request carries the abort signal and timeout, and strips <think> from input and output', async () => {
+    const memory = new MemoryManager(new DocumentStore(':memory:'));
+    const controller = new AbortController();
+    let seenPrompt = '';
+    let seenOptions: { signal?: AbortSignal; timeoutMs?: number } = {};
+    const summarizer = new MockLLMProvider();
+    summarizer.generate = async (prompt, options) => {
+      seenPrompt = prompt;
+      seenOptions = { signal: options?.signal, timeoutMs: options?.timeoutMs };
+      return '<think>planning the summary</think>Owner prefers short answers.';
+    };
+    const summary = await summarizeAndStoreSession({
+      memory,
+      summarizer,
+      userId: 'owner',
+      sessionId: 's1',
+      signal: controller.signal,
+      timeoutMs: 120_000,
+      turns: [
+        { role: 'user', content: 'Keep it short' },
+        { role: 'assistant', content: '<think>the owner wants brevity</think>Will do.' },
+      ],
+    });
+    assert.equal(summary, 'Owner prefers short answers.');
+    assert.equal(seenOptions.signal, controller.signal);
+    assert.equal(seenOptions.timeoutMs, 120_000);
+    assert.ok(seenPrompt.includes('Will do.'));
+    assert.ok(!seenPrompt.includes('the owner wants brevity'), 'reasoning is not part of the summary input');
+    assert.equal((await memory.getSessionSummaries('owner', 's1'))[0].summary, 'Owner prefers short answers.');
+  });
+});
+
 describe('helpers', () => {
   test('shouldSummarize fires at 6 messages and every 6 thereafter', () => {
     assert.deepEqual(
@@ -185,5 +229,55 @@ describe('helpers', () => {
     assert.equal(pickSmallestModel(['qwen3:8b', 'qwen2.5:7b', 'qwen2.5:0.5b', 'nomic-embed-text:137m', 'llama3.2:3b']), 'qwen2.5:0.5b');
     assert.equal(pickSmallestModel(['gemma3:270m', 'qwen3:8b']), 'gemma3:270m');
     assert.equal(pickSmallestModel(['custom-model']), null);
+  });
+});
+
+// Sessions stay isolated: the profile (T1) and other sessions' summaries (T2) are the only sanctioned cross-session channels.
+describe('buildConversationContext session isolation', () => {
+  test('T3 lists only the current session\'s own past tasks', async () => {
+    const memory = new MemoryManager(new DocumentStore(':memory:'));
+    await memory.recordEpisode({ userId: 'owner', sessionId: 'here', goal: 'Deploy the staging server', steps: [], outcome: 'HERE-OUTCOME' });
+    await memory.recordEpisode({ userId: 'owner', sessionId: 'elsewhere', goal: 'Deploy the staging server again', steps: [], outcome: 'ELSEWHERE-OUTCOME' });
+
+    const ctx = await buildConversationContext({ memory, userId: 'owner', sessionId: 'here', prompt: 'Deploy the staging server please' });
+    assert.ok(ctx.includedTiers.includes('T3'));
+    assert.ok(ctx.text.includes('HERE-OUTCOME'));
+    assert.ok(!ctx.text.includes('ELSEWHERE-OUTCOME'));
+    assert.ok(!ctx.text.includes('again'), "another session's goal text does not appear either");
+  });
+
+  test('a brand-new session gets no T3 section even when other sessions did matching work', async () => {
+    const memory = new MemoryManager(new DocumentStore(':memory:'));
+    await memory.recordEpisode({ userId: 'owner', sessionId: 'old', goal: 'Deploy the staging server', steps: [], outcome: 'OLD-OUTCOME' });
+    const ctx = await buildConversationContext({ memory, userId: 'owner', sessionId: 'new', prompt: 'Deploy the staging server' });
+    assert.ok(!ctx.includedTiers.includes('T3'));
+    assert.ok(!ctx.text.includes('OLD-OUTCOME'));
+  });
+
+  test('the sanctioned channels still cross sessions: the profile (T1) and other sessions\' summaries (T2)', async () => {
+    const memory = new MemoryManager(new DocumentStore(':memory:'));
+    await memory.setProfileFact('owner', 'drink', 'masala chai');
+    await memory.saveSessionSummary('owner', 'old', 'SUMMARY-OF-OLD-CHAT', 6);
+    const ctx = await buildConversationContext({ memory, userId: 'owner', sessionId: 'new', prompt: 'hello there' });
+    assert.ok(ctx.includedTiers.includes('T1') && ctx.includedTiers.includes('T2'));
+    assert.ok(ctx.text.includes('masala chai'));
+    assert.ok(ctx.text.includes('SUMMARY-OF-OLD-CHAT'));
+  });
+
+  test('a memory without queryEpisodes still works and yields no T3', async () => {
+    const ctx = await buildConversationContext({
+      memory: {
+        formatProfileForPrompt: async () => '',
+        getSessionSummaries: async () => [],
+        searchKnowledge: async () => [],
+        saveSessionSummary: async () => {
+          throw new Error('unused');
+        },
+      },
+      userId: 'owner',
+      sessionId: 's',
+      prompt: 'anything',
+    });
+    assert.deepEqual(ctx.includedTiers, []);
   });
 });

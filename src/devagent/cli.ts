@@ -4,10 +4,14 @@
  */
 
 import os from 'node:os';
+import path from 'node:path';
+import fs from 'node:fs';
 import { OwnActionRegistry } from './action-registry.js';
 import { ActionGateway } from './action-gateway.js';
 import { BoardWatcher } from './board-watcher.js';
 import { config } from '../config.js';
+import { DocumentStore } from '../storage/collection.js';
+import { KillSwitch } from '../security/kill-switch.js';
 import { logger } from '../utils/logger.js';
 
 async function main() {
@@ -23,8 +27,15 @@ async function main() {
   logger.info(`Memory Baseline: ${freeGb} GB free / ${totalGb} GB total`);
 
   const registry = new OwnActionRegistry(config.databasePath);
+  // The kill state lives in the shared document store; opening it here is what makes /kill from Telegram or the web
+  // stop this watcher too (`KillSwitch` re-reads the persisted row about once a second).
+  const dataDir = path.resolve(process.cwd(), 'data');
+  fs.mkdirSync(dataDir, { recursive: true });
+  const killStore = new DocumentStore(path.join(dataDir, 'jarvis.db'));
+  const killSwitch = new KillSwitch(killStore);
   const gateway = new ActionGateway(registry, {
     minFreeMemoryBytes: config.minFreeMemoryBytes,
+    killSwitch,
   });
   const watcher = new BoardWatcher({ registry, gateway });
 
@@ -35,10 +46,15 @@ async function main() {
       logger.info(` - [${act.createdAt}] ${act.actionType} on ${act.targetId} (ID: ${act.id})`);
     }
     registry.close();
+    killStore.close();
     return;
   }
 
   const pollCycle = async () => {
+    if (killSwitch.isKilled()) {
+      logger.warn(`[BoardWatcher] Kill switch engaged (${killSwitch.getKillReason() || 'emergency stop'}); skipping this polling cycle.`);
+      return;
+    }
     logger.info(`[BoardWatcher] Starting polling cycle for Board #${config.projectNumber}...`);
     try {
       const items = await watcher.pollBoard();
@@ -55,6 +71,7 @@ async function main() {
   if (isNow) {
     await pollCycle();
     registry.close();
+    killStore.close();
     return;
   }
 
@@ -70,6 +87,7 @@ async function main() {
       logger.info('\n[BoardWatcher] Shutting down watcher gracefully...');
       clearInterval(interval);
       registry.close();
+      killStore.close();
       process.exit(0);
     });
   }

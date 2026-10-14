@@ -16,6 +16,7 @@ import crypto from 'node:crypto';
 import type { OwnActionRegistry } from './action-registry.js';
 import type { GatewayActionRequest, GatewayTier, ActionType, OwnActionRecord, ActionStatus } from './types.js';
 import type { ApprovalBroker } from '../security/approvals.js';
+import { redactSensitive } from '../memory/sensitive.js';
 import { logger } from '../utils/logger.js';
 
 /** Floor tier per action type. Unknown action types are treated as Tier 2. */
@@ -104,12 +105,23 @@ function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/**
+ * Redacts each string on its own, so a secret label inside one argument cannot swallow the next one. The approval
+ * broker gets the unredacted metadata (the owner must see the real action); only the persisted audit copy is redacted.
+ */
+function redactDeep(value: unknown, depth = 0): unknown {
+  if (typeof value === 'string') return redactSensitive(value);
+  if (depth > 6 || typeof value !== 'object' || value === null) return value;
+  if (Array.isArray(value)) return value.map((item) => redactDeep(item, depth + 1));
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactDeep(item, depth + 1)]));
+}
+
 function safeJson(value: unknown): string | undefined {
   if (value === undefined) {
     return undefined;
   }
   try {
-    const text = JSON.stringify(value);
+    const text = JSON.stringify(redactDeep(value));
     return text.length > MAX_RECORDED_METADATA_CHARS ? `${text.slice(0, MAX_RECORDED_METADATA_CHARS)}...[truncated]` : text;
   } catch {
     return '[unserializable metadata]';

@@ -17,7 +17,8 @@ interface ResearchSessionDoc {
   id?: string;
   query: string;
   synthesizedAnswer: string;
-  confidenceScore: number;
+  /** Null when no two independent sources existed to agree with each other. */
+  confidenceScore: number | null;
   sources: string[];
   createdAt: string;
 }
@@ -30,25 +31,28 @@ export async function runResearch(query: string): Promise<ResearchSessionDoc> {
   const store = new DocumentStore(dbPath);
   const sessions = store.collection<ResearchSessionDoc>('sessions');
 
-  // 2. Metasearch via SearXNG
+  // 2. Metasearch via SearXNG. `enableFallback: true` makes an unreachable engine come back as `source: 'none'`
+  // with a reason instead of an exception; the live DuckDuckGo fallback stays opt-in via `searchLiveFallback`.
   const searchClient = new SearXNGClient({
     baseUrl: config.searxngBaseUrl,
-    enableFallback: config.searchLiveFallback,
+    enableFallback: true,
     enableLiveFallback: config.searchLiveFallback,
   });
 
-  const searchResults = await searchClient.search(query, { maxResults: 3 });
-  logger.info(`[ResearchCLI] Found ${searchResults.length} search results`);
+  const outcome = await searchClient.searchDetailed(query, { maxResults: 3 });
+  if (outcome.source === 'none' || outcome.results.length === 0) {
+    store.close();
+    throw new Error(outcome.unavailableReason ?? 'The search engine returned no results, so there is nothing to synthesize from.');
+  }
+  logger.info(`[ResearchCLI] Found ${outcome.results.length} search results via ${outcome.source}`);
 
-  // 3. Extract & Distill Content with Taint Tracking
+  // 3. Fetch & distill the real pages (snippet fallback per result), with taint tracking
   const distiller = new ContentDistiller();
-  const distilledSources = [];
-
-  for (const res of searchResults) {
-    logger.info(`[ResearchCLI] Extracting: ${res.title} (${res.url})`);
-    // Simulated or live fetch with taint tracking
-    const extracted = distiller.extractText(res.snippet, res.url);
-    distilledSources.push(extracted);
+  const pages = await distiller.fetchTopResults(outcome.results, { limit: 3 });
+  const distilledSources = pages.filter((page) => page.content && page.origin !== 'unavailable');
+  if (distilledSources.length === 0) {
+    store.close();
+    throw new Error(`None of the ${pages.length} result pages could be read: ${pages[0]?.error ?? 'no content'}`);
   }
 
   // 4. Corroborate Consensus & Score Confidence
@@ -64,6 +68,7 @@ export async function runResearch(query: string): Promise<ResearchSessionDoc> {
   ];
 
   const consensusReport = consensusEngine.buildReport(claimsData);
+  const corroborated = consensusReport.evaluations.some((evaluation) => evaluation.insufficientSources === undefined);
   logger.info(`[ResearchCLI] Consensus Score: ${consensusReport.overallScore} (${consensusReport.summary})`);
 
   // 5. Synthesize with Local LLM
@@ -75,8 +80,8 @@ export async function runResearch(query: string): Promise<ResearchSessionDoc> {
   let synthesis = '';
   const prompt = CognitionEngine.formatPrompt(query, {
     taskType: 'research',
-    researchFacts: distilledSources.map((s, i) => `[Source ${i + 1}] (${s.url}):\n${s.content}`).join('\n\n'),
-    consensusScore: consensusReport.overallScore,
+    researchFacts: distilledSources.map((s, i) => `[Source ${i + 1}] (${s.url}) [${s.origin}]\n${s.content}`).join('\n\n'),
+    consensusScore: corroborated ? consensusReport.overallScore : undefined,
     activeModel: config.defaultModel,
   });
 
@@ -91,12 +96,12 @@ export async function runResearch(query: string): Promise<ResearchSessionDoc> {
   const sessionRecord: ResearchSessionDoc = {
     query,
     synthesizedAnswer: synthesis,
-    confidenceScore: consensusReport.overallScore,
+    confidenceScore: corroborated ? consensusReport.overallScore : null,
     sources: distilledSources.map((s) => s.url),
     createdAt: new Date().toISOString(),
   };
 
-  const saved = sessions.insertOne(sessionRecord);
+  const saved = sessions.insertUnique(sessionRecord);
   store.close();
 
   return saved;
@@ -113,7 +118,7 @@ if (process.argv[1] && process.argv[1].endsWith('research.ts')) {
   runResearch(query)
     .then((result) => {
       console.log(`\n📌 Query: "${result.query}"`);
-      console.log(`🎯 Confidence Score: ${result.confidenceScore * 100}%`);
+      console.log(result.confidenceScore === null ? '🎯 Source agreement: single source, not corroborated.' : `🎯 Source agreement: ${Math.round(result.confidenceScore * 100)}%`);
       console.log(`\n📝 Synthesized Answer:\n${result.synthesizedAnswer}\n`);
       console.log(`📚 Cited Sources:`);
       for (const src of result.sources) {

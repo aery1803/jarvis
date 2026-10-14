@@ -113,6 +113,37 @@ describe('ModelProvisioner dispatch', () => {
     assert.equal(messages.length, 2);
   });
 
+  test('a pull receives the turn signal, relays progress, and stops when the signal aborts', async () => {
+    const { provisioner, provider } = make([{ name: 'qwen3:8b', size: 5225388164 }]);
+    const seen: { signal?: AbortSignal; timeoutMs?: number } = {};
+    provider.pullModel = (async (_name: string, options?: { signal?: AbortSignal; timeoutMs?: number; onProgress?: (p: { status: string; percent?: number }) => void }) => {
+      seen.signal = options?.signal;
+      seen.timeoutMs = options?.timeoutMs;
+      options?.onProgress?.({ status: 'pulling', percent: 10 });
+      options?.onProgress?.({ status: 'pulling', percent: 12 });
+      return new Promise<boolean>((resolve) => options?.signal?.addEventListener('abort', () => resolve(false)));
+    }) as typeof provider.pullModel;
+    const controller = new AbortController();
+    const messages: string[] = [];
+    const decision = provisioner.ensureAndDispatch({
+      prompt: 'Calculate deep math probability with rigorous proof',
+      allowPull: true,
+      confirmPull: async () => true,
+      signal: controller.signal,
+      pullTimeoutMs: 1234,
+      onProgress: (m) => { messages.push(m); },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    controller.abort('Kill switch engaged');
+    const d = await decision;
+    assert.equal(seen.signal?.aborted, true);
+    assert.equal(seen.timeoutMs, 1234);
+    assert.ok(messages.some((m) => m.includes('10%')));
+    assert.ok(!messages.some((m) => m.includes('12%')), 'progress is throttled to 5% steps');
+    assert.equal(d.wasInstalledOnDemand, false);
+    assert.match(d.rationale, /was stopped/);
+  });
+
   test('explicitModel is honoured without reclassifying the prompt', async () => {
     const { provisioner, switched } = make(FLEET);
     const d = await provisioner.ensureAndDispatch({ prompt: 'Write a python function', explicitModel: 'qwen3:14b' });

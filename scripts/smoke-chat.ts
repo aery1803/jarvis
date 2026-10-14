@@ -51,6 +51,9 @@ function record(name: string, status: Status, detail: string): void {
   console.log(`${color}${status}\x1b[0m  ${name} — ${detail}`);
 }
 
+/** The server refuses every state-changing request that lacks this header (a cross-site page cannot add it). */
+const CLIENT_HEADERS = { 'Content-Type': 'application/json', 'X-Jarvis-Client': 'web' };
+
 async function getJson<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${baseUrl}${path}`, init);
   if (!res.ok) throw new Error(`${init?.method ?? 'GET'} ${path} -> HTTP ${res.status}`);
@@ -60,7 +63,7 @@ async function getJson<T>(path: string, init?: RequestInit): Promise<T> {
 async function createSession(title: string, model: string): Promise<string> {
   const session = await getJson<{ id: string }>('/api/sessions', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: CLIENT_HEADERS,
     body: JSON.stringify({ title: `[smoke] ${title}`, model }),
   });
   createdSessions.push(session.id);
@@ -83,7 +86,7 @@ async function streamChat(
 
   const res = await fetch(`${baseUrl}/api/chat/stream`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: CLIENT_HEADERS,
     signal: controller.signal,
     body: JSON.stringify({ sessionId, prompt, model, useResearch: false }),
   });
@@ -103,9 +106,10 @@ async function streamChat(
           done = true;
           break;
         }
-        const data = JSON.parse(payload) as { chunk?: string };
+        const data = JSON.parse(payload) as { chunk?: string; error?: string };
+        if (typeof data.error === 'string') throw new Error(`the server reported: ${data.error}`);
         if (typeof data.chunk === 'string') {
-          // The provisioning notice and research banner are not model output.
+          // Status, model and tool frames are separate event types, so only `chunk` is model output.
           if (firstChunkMs === null) firstChunkMs = Date.now() - started;
           text += data.chunk;
           chunks += 1;
@@ -150,9 +154,22 @@ async function main(): Promise<void> {
   });
   record('health', health.status === 'ok' ? 'PASS' : 'FAIL', `status=${health.status}`);
 
-  const { models, active } = await getJson<{ models: string[]; active: string }>('/api/models');
+  const { models, active } = await getJson<{ models: string[]; active: string }>('/api/models').catch((err: unknown) => {
+    console.error(`/api/models failed (${err instanceof Error ? err.message : String(err)}). Is Ollama running?`);
+    process.exit(2);
+  });
   const model = argValue('--model') ?? (models.includes(active) ? active : models[0]);
   console.log(`Model: ${model}\n`);
+
+  await check('dashboard endpoints', async () => {
+    const paths = ['/api/status', '/api/ledger', '/api/tools', '/api/mcp', '/api/benchmark', '/api/eval', '/api/skills', '/api/email', '/api/phone', '/api/approvals'];
+    const failed: string[] = [];
+    for (const path of paths) {
+      const res = await fetch(`${baseUrl}${path}`).catch(() => null);
+      if (!res || !res.ok) failed.push(`${path} -> ${res ? res.status : 'unreachable'}`);
+    }
+    record('dashboard endpoints', failed.length === 0 ? 'PASS' : 'FAIL', failed.length === 0 ? `${paths.length} endpoints answered` : failed.join(', '));
+  });
 
   await check('streaming', async () => {
     const sessionId = await createSession('streaming', model);
@@ -229,7 +246,7 @@ async function main(): Promise<void> {
   }
 
   for (const id of createdSessions) {
-    await fetch(`${baseUrl}/api/sessions/${id}`, { method: 'DELETE' }).catch(() => undefined);
+    await fetch(`${baseUrl}/api/sessions/${id}`, { method: 'DELETE', headers: CLIENT_HEADERS }).catch(() => undefined);
   }
 
   const failed = results.filter((r) => r.status === 'FAIL').length;

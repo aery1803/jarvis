@@ -95,10 +95,12 @@ export class MediaService {
     const baseUrl = (settings.baseUrl ?? DEFAULT_BASE_URL).replace(/\/+$/, '');
     const fetchImpl = settings.fetchImpl ?? fetch;
     const timeoutMs = settings.timeoutMs ?? 120_000;
+    const withAbort = (timeout: AbortSignal): AbortSignal => (settings.signal ? AbortSignal.any([settings.signal, timeout]) : timeout);
+    if (settings.signal?.aborted) return unavailable('the request was stopped before it started');
 
     let installed: string[];
     try {
-      const tagsResponse = await fetchImpl(`${baseUrl}/api/tags`, { signal: AbortSignal.timeout(Math.min(timeoutMs, 10_000)) });
+      const tagsResponse = await fetchImpl(`${baseUrl}/api/tags`, { signal: withAbort(AbortSignal.timeout(Math.min(timeoutMs, 10_000))) });
       if (!tagsResponse.ok) return unavailable(`Ollama /api/tags returned HTTP ${tagsResponse.status}`);
       const tags = OllamaTagsSchema.safeParse(await tagsResponse.json());
       if (!tags.success) return unavailable('Ollama /api/tags returned an unexpected response');
@@ -126,7 +128,7 @@ export class MediaService {
           images: [Buffer.from(image).toString('base64')],
           stream: false,
         }),
-        signal: AbortSignal.timeout(timeoutMs),
+        signal: withAbort(AbortSignal.timeout(timeoutMs)),
       });
       if (!response.ok) return unavailable(`Ollama /api/generate returned HTTP ${response.status}`);
       const parsed = OllamaGenerateSchema.safeParse(await response.json());

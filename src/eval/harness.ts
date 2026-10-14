@@ -1,10 +1,14 @@
 import type { LLMProvider } from '../services/provider.js';
+import { findToolCall, isPromptEcho, isRefusal, stripThinking } from './answer-check.js';
 
 export interface EvalTestCase {
   id: string;
   category: 'retrieval' | 'reasoning' | 'tool_calling' | 'headroom';
   prompt: string;
+  /** Anchor it to the answer: a pattern that also matches the prompt's own words passes on an echo. */
   expectedPattern: RegExp | string;
+  /** An extra check on the answer (parse the emitted JSON); both must hold. */
+  verify?: (output: string) => boolean;
   maxLatencyMs?: number;
 }
 
@@ -16,6 +20,14 @@ export interface EvalCaseResult {
   latencyMs: number;
   output: string;
   notes?: string;
+  /** True when the provider could not be queried; distinct from a wrong answer. */
+  errored?: boolean;
+}
+
+export interface EvalRunOptions {
+  signal?: AbortSignal;
+  /** Per-case request timeout (default 120000). */
+  timeoutMs?: number;
 }
 
 export interface EvalReport {
@@ -24,6 +36,10 @@ export interface EvalReport {
   accuracyRate: number; // e.g. 0.95
   meetsTarget: boolean; // >= 0.90 per Section 16
   avgLatencyMs: number;
+  /** Cases that could not be run at all (provider error); counted as failures in `accuracyRate`. */
+  erroredTests: number;
+  /** True when the caller aborted before every case ran. */
+  aborted: boolean;
   results: EvalCaseResult[];
 }
 
@@ -39,23 +55,28 @@ export class EvaluationHarness {
       id: 'eval-reasoning-01',
       category: 'reasoning',
       prompt: 'If a train leaves at 2:00 PM and travels 120 miles at 60 mph, what time does it arrive?',
-      expectedPattern: /4:00|4 PM/i,
+      expectedPattern: /(?<![\d:.])(?:4:00\s*(?:pm|p\.m\.)?|4\s*pm|16:00)(?![\d])/i,
       maxLatencyMs: 8000,
     });
 
+    // A plain `generate` call cannot run a tool, so the case checks that the model emits a well-formed call.
     this.addCase({
       id: 'eval-tool-01',
       category: 'tool_calling',
-      prompt: 'Check current system stats and memory.',
-      expectedPattern: /system|stats|memory/i,
+      prompt: 'Check the current system stats and memory. Reply with only a JSON tool call of the form {"tool": "<name>", "parameters": {}}, using the tool name system_stats.',
+      expectedPattern: /"tool"\s*:\s*"system_stats"/i,
+      verify: (output) => findToolCall(output, 'system_stats') !== null,
       maxLatencyMs: 5000,
     });
 
+    // The provider gets no hidden context, so the facts are in the prompt and the answer is a value read from them.
     this.addCase({
       id: 'eval-retrieval-01',
       category: 'retrieval',
-      prompt: 'What hardware runs Jarvis?',
-      expectedPattern: /ASUS|ROG|Flow|Z13|Radeon|8060S|AMD/i,
+      prompt:
+        'Hardware profile: Jarvis runs on an ASUS ROG Flow Z13 with a Radeon 8060S GPU and 31.65 GB of host RAM.\n' +
+        'Question: how many GB of host RAM does the Jarvis workstation have? Answer with the number.',
+      expectedPattern: /(?<![\d.])31\.65(?![\d])/,
       maxLatencyMs: 5000,
     });
   }
@@ -64,18 +85,34 @@ export class EvaluationHarness {
     this.testCases.push(testCase);
   }
 
-  async runTest(testCase: EvalTestCase): Promise<EvalCaseResult> {
+  async runTest(testCase: EvalTestCase, options: EvalRunOptions = {}): Promise<EvalCaseResult> {
     const start = Date.now();
     try {
-      const response = await this.provider.generate(testCase.prompt);
+      const response: unknown = await this.provider.generate(testCase.prompt, {
+        signal: options.signal,
+        timeoutMs: options.timeoutMs ?? 120_000,
+      });
       const latencyMs = Date.now() - start;
 
-      const output = typeof response === 'string' ? response : (response as any).text ?? String(response);
+      const raw =
+        typeof response === 'string'
+          ? response
+          : typeof (response as { text?: unknown } | null)?.text === 'string'
+            ? (response as { text: string }).text
+            : String(response);
+      // A pattern must not match the model's scratch work, a refusal, or the question repeated back.
+      const output = stripThinking(raw);
+      let answerNote: string | undefined;
       let matched = false;
-      if (typeof testCase.expectedPattern === 'string') {
-        matched = output.toLowerCase().includes(testCase.expectedPattern.toLowerCase());
-      } else {
-        matched = testCase.expectedPattern.test(output);
+      if (output === '') answerNote = 'empty answer';
+      else if (isRefusal(output)) answerNote = 'the model declined or did not know';
+      else if (isPromptEcho(output, testCase.prompt)) answerNote = 'the output repeats the question';
+      else {
+        matched = typeof testCase.expectedPattern === 'string' ? output.toLowerCase().includes(testCase.expectedPattern.toLowerCase()) : testCase.expectedPattern.test(output);
+        if (matched && testCase.verify && !testCase.verify(output)) {
+          matched = false;
+          answerNote = 'the answer failed its structural check';
+        }
       }
 
       const latencyOk = !testCase.maxLatencyMs || latencyMs <= testCase.maxLatencyMs;
@@ -89,40 +126,49 @@ export class EvaluationHarness {
         score,
         latencyMs,
         output,
-        notes: !latencyOk ? 'Latency exceeded budget' : undefined,
+        notes: !latencyOk ? 'Latency exceeded budget' : answerNote,
       };
-    } catch (err: any) {
+    } catch (err: unknown) {
       return {
         testId: testCase.id,
         category: testCase.category,
         passed: false,
+        errored: true,
         score: 0.0,
         latencyMs: Date.now() - start,
         output: '',
-        notes: `Inference failed: ${err.message}`,
+        notes: `Inference failed: ${err instanceof Error ? err.message : String(err)}`,
       };
     }
   }
 
-  async runAll(): Promise<EvalReport> {
+  async runAll(options: EvalRunOptions = {}): Promise<EvalReport> {
     const results: EvalCaseResult[] = [];
     let totalLatency = 0;
+    let aborted = false;
 
     for (const c of this.testCases) {
-      const res = await this.runTest(c);
+      if (options.signal?.aborted) {
+        aborted = true;
+        break;
+      }
+      const res = await this.runTest(c, options);
       results.push(res);
       totalLatency += res.latencyMs;
     }
 
     const passedCount = results.filter((r) => r.passed).length;
     const accuracyRate = results.length > 0 ? parseFloat((passedCount / results.length).toFixed(2)) : 0;
+    const erroredTests = results.filter((r) => r.errored).length;
 
     return {
       totalTests: results.length,
       passedTests: passedCount,
       accuracyRate,
-      meetsTarget: accuracyRate >= 0.9,
+      meetsTarget: !aborted && results.length === this.testCases.length && accuracyRate >= 0.9,
       avgLatencyMs: results.length > 0 ? parseFloat((totalLatency / results.length).toFixed(2)) : 0,
+      erroredTests,
+      aborted,
       results,
     };
   }

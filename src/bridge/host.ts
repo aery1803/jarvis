@@ -5,12 +5,12 @@ import path from 'node:path';
 import type { HostCommand, HostCommandResult, ScreenState } from './types.js';
 import type { ActionGateway } from '../devagent/action-gateway.js';
 import { stripControlChars } from './untrusted.js';
+import { isSecretPath, SECRET_GIT_EXCLUDE_PATHSPECS } from '../security/secret-paths.js';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_TIMEOUT_MS = 60_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 64 * 1024;
 const SHELL_METACHARACTERS = /[;&|`$><\r\n\0]/;
-const SECRET_FILE_PATTERN = /^(\.env(\..*)?|settings\.env|.*\.(pem|key|pfx|p12)|id_(rsa|ed25519|ecdsa).*|credentials.*)$/i;
 const ENV_PASSTHROUGH = ['PATH', 'Path', 'PATHEXT', 'SystemRoot', 'windir', 'COMSPEC', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'TEMP', 'TMP', 'TMPDIR'];
 
 const GIT_STATUS_FLAGS = new Set(['-s', '--short', '-b', '--branch', '-sb', '--porcelain', '--porcelain=v1', '--porcelain=v2', '--long']);
@@ -216,7 +216,7 @@ export class HostBridge {
         };
       }
       case 'git':
-        return this.classifyGit(rest);
+        return this.classifyGit(rest, base);
       case 'echo':
         return { tier: 1, reason: 'echo', plan: { kind: 'builtin', name: 'echo', args: rest } };
       case 'pwd':
@@ -243,7 +243,11 @@ export class HostBridge {
    * Runs a command on the host. Tier 1 commands run without a shell; anything else needs
    * `isOwnerExplicitlyApproved` and is audited through the Action Gateway when one is configured.
    */
-  async executeCommand(cmd: HostCommand, isOwnerExplicitlyApproved = false): Promise<HostCommandResult> {
+  async executeCommand(
+    cmd: HostCommand,
+    isOwnerExplicitlyApproved = false,
+    options: { approvalAuditedByCaller?: boolean } = {}
+  ): Promise<HostCommandResult> {
     const classification = this.classifyCommand(cmd);
     const effectiveTier = cmd.tier === 2 ? 2 : classification.tier;
     const displayLine = [cmd.command, ...(cmd.args ?? [])].join(' ');
@@ -267,10 +271,12 @@ export class HostBridge {
       return this.toResult(result, start);
     };
 
-    if (this.gateway) {
+    if (this.gateway && !options.approvalAuditedByCaller) {
       if (effectiveTier === 2) {
         const target = (cmd.command.trim().split(/\s+/)[0] ?? 'host').slice(0, 64);
-        return this.gateway.executeTier2Action('HOST_COMMAND', 'Owner-approved host command', target, run);
+        return this.gateway.executeTier2Action('HOST_COMMAND', 'Owner-approved host command', target, run, {
+          isOwnerExplicitlyApproved: true,
+        });
       }
       this.gateway.verifyMemoryHeadroom();
     }
@@ -337,7 +343,18 @@ export class HostBridge {
     return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
   }
 
-  private classifyGit(rest: string[]): HostCommandClassification {
+  /**
+   * A `git log`/`git diff` operand is Tier 1 only when it names a revision. `GIT_REVISION` also matches file
+   * paths (`.env`, `/etc/passwd`, `data/jarvis.db`), which would make `git diff HEAD~50 settings.env` print a
+   * secret's history, so anything that is absolute, secret-looking or exists on disk is not a revision.
+   */
+  private isPlainRevision(token: string, base: string): boolean {
+    if (!GIT_REVISION.test(token) || token.startsWith('/') || token.startsWith('./') || token.startsWith('../')) return false;
+    if (isSecretPath(token)) return false;
+    return !fs.existsSync(path.resolve(base, token));
+  }
+
+  private classifyGit(rest: string[], base: string): HostCommandClassification {
     const [sub, ...flags] = rest;
     const allowed: Record<string, Set<string>> = {
       status: GIT_STATUS_FLAGS,
@@ -359,13 +376,15 @@ export class HostBridge {
           continue;
         }
       }
-      if (allowsRevisions && !flag.startsWith('-') && GIT_REVISION.test(flag)) continue;
+      if (allowsRevisions && !flag.startsWith('-') && this.isPlainRevision(flag, base)) continue;
       return { tier: 2, reason: `git ${sub} argument '${flag}' is not allowlisted` };
     }
 
     const prefix = ['-c', 'core.fsmonitor=false', '--no-pager'];
     const extra = sub === 'diff' ? ['--no-ext-diff'] : [];
-    return { tier: 1, reason: `read-only git ${sub}`, plan: { kind: 'process', file: 'git', args: [...prefix, sub, ...extra, ...flags] } };
+    // A bare `git diff` prints every changed tracked file, so secret files are excluded by pathspec rather than by operand.
+    const tail = sub === 'diff' ? ['--', ...SECRET_GIT_EXCLUDE_PATHSPECS] : [];
+    return { tier: 1, reason: `read-only git ${sub}`, plan: { kind: 'process', file: 'git', args: [...prefix, sub, ...extra, ...flags, ...tail] } };
   }
 
   private classifyListing(rest: string[], base: string): HostCommandClassification {
@@ -396,8 +415,8 @@ export class HostBridge {
       const resolved = path.resolve(base, arg);
       if (!this.isInsideWorkspace(resolved)) return { tier: 2, reason: 'path is outside the workspace' };
       const real = realpathOrResolved(resolved);
-      const segments = path.relative(this.workspaceRoot, real).split(/[\\/]/);
-      if (segments.includes('.git') || SECRET_FILE_PATTERN.test(path.basename(real))) {
+      // Both spellings are checked: a symlink can hide a secret behind an innocent name, and a secret name can sit behind a symlink.
+      if (isSecretPath(path.relative(this.workspaceRoot, resolved)) || isSecretPath(path.relative(this.workspaceRoot, real))) {
         return { tier: 2, reason: 'path looks like a secret or repository internals' };
       }
       targets.push(real);

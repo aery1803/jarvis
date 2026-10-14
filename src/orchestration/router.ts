@@ -22,6 +22,8 @@ export interface RouteDecision {
   reason?: string;
   /** The model the governor refused when `canRun` is false. */
   refusedModel?: ModelDefinition;
+  /** How the VRAM verdict was reached when it is worth telling the owner: the chosen model is resident, or others are unloaded for it. */
+  fitNote?: string;
 }
 
 const CODE_WORDS = ['function', 'class', 'const', 'import', 'def', 'return', 'typescript', 'python', 'bug', 'refactor', 'test', 'tests'];
@@ -61,9 +63,12 @@ export class CascadeRouter {
     }
 
     const refusals: string[] = [];
+    let fitNote = '';
     const tryFit = (m: ModelDefinition): boolean => {
       const check = this.governor.canFit(m);
       if (!check.canRun) refusals.push(`${m.id}: ${check.reason ?? 'insufficient memory'}`);
+      // An eviction (or an already-resident model) is part of the honest rationale for the choice.
+      fitNote = check.canRun && (check.evicts !== undefined || check.alreadyResident) ? (check.note ?? '') : '';
       return check.canRun;
     };
 
@@ -85,9 +90,10 @@ export class CascadeRouter {
       return {
         chosenModel: first,
         lane,
-        rationale: [...notes, `Selected ${first.name} (${first.parameterSize}) for lane '${lane}'.`].join(' '),
+        rationale: [...notes, `Selected ${first.name} (${first.parameterSize}) for lane '${lane}'.`, fitNote].filter(Boolean).join(' '),
         isFallback: preferredOk ? false : notes.length > 0,
         canRun: true,
+        ...(fitNote ? { fitNote } : {}),
       };
     }
 
@@ -108,10 +114,12 @@ export class CascadeRouter {
             ...notes,
             first ? `${first.name} was refused (${refusals[0] ?? 'insufficient memory'}).` : `No model serves lane '${lane}'.`,
             `Cascaded to ${fallback.name}.`,
-          ].join(' '),
+            fitNote,
+          ].filter(Boolean).join(' '),
           isFallback: true,
           canRun: true,
           reason: refusals[0],
+          ...(fitNote ? { fitNote } : {}),
         };
       }
     }

@@ -1,11 +1,10 @@
 import dns from 'node:dns/promises';
-import net from 'node:net';
+import { BlockedDestinationError, assertPublicDestination, isBlockedAddress, pinnedRequest } from '../security/ssrf.js';
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_BYTES = 2 * 1024 * 1024;
 const DEFAULT_MAX_REDIRECTS = 5;
 const ALLOWED_CONTENT_TYPES = ['text/html', 'application/xhtml+xml', 'text/plain'];
-const BLOCKED_HOST_SUFFIXES = ['.localhost', '.local', '.internal', '.localdomain', '.home.arpa'];
 
 export interface FetchedPage {
   url: string;
@@ -16,6 +15,7 @@ export interface FetchedPage {
 }
 
 export interface FetchPageOptions {
+  /** Replaces the pinned transport; tests only. Production leaves it unset so connections go to the validated address. */
   fetchImpl?: typeof fetch;
   /** Resolves a hostname to its addresses; injectable so tests need no DNS. */
   resolveHost?: (hostname: string) => Promise<string[]>;
@@ -31,51 +31,9 @@ export class PageFetchError extends Error {
   }
 }
 
-function isPrivateIpv4(address: string): boolean {
-  const [a, b] = address.split('.').map(Number);
-  return (
-    a === 0 ||
-    a === 10 ||
-    a === 127 ||
-    a >= 224 ||
-    (a === 100 && b >= 64 && b <= 127) ||
-    (a === 169 && b === 254) ||
-    (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168) ||
-    (a === 192 && b === 0) ||
-    (a === 198 && (b === 18 || b === 19))
-  );
-}
-
-/** True for loopback, private, link-local, CGNAT, multicast and unspecified addresses (v4, v6 and v4-mapped v6). */
+/** True for loopback, private, link-local, CGNAT, multicast and unspecified addresses in every v4 and v6 encoding. */
 export function isPrivateAddress(address: string): boolean {
-  const family = net.isIP(address);
-  if (family === 4) return isPrivateIpv4(address);
-  if (family !== 6) return true;
-  const lower = address.toLowerCase();
-  const mapped = /^(?:::ffff:|64:ff9b::)(\d+\.\d+\.\d+\.\d+)$/.exec(lower);
-  if (mapped) return isPrivateIpv4(mapped[1]);
-  const mappedHex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(lower);
-  if (mappedHex) {
-    const hi = parseInt(mappedHex[1], 16);
-    const lo = parseInt(mappedHex[2], 16);
-    return isPrivateIpv4(`${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`);
-  }
-  return lower === '::' || lower === '::1' || /^f[cd]/.test(lower) || /^fe[89ab]/.test(lower) || lower.startsWith('ff');
-}
-
-async function assertPublicHost(hostname: string, resolveHost: (hostname: string) => Promise<string[]>): Promise<void> {
-  const host = hostname.replace(/^\[|\]$/g, '').toLowerCase();
-  if (host === 'localhost' || BLOCKED_HOST_SUFFIXES.some((suffix) => host.endsWith(suffix))) {
-    throw new PageFetchError(`Blocked host '${host}': local and internal hostnames are not fetched.`);
-  }
-  const addresses = net.isIP(host) ? [host] : await resolveHost(host);
-  if (addresses.length === 0) throw new PageFetchError(`Host '${host}' did not resolve.`);
-  for (const address of addresses) {
-    if (isPrivateAddress(address)) {
-      throw new PageFetchError(`Blocked host '${host}': resolves to a private or loopback address.`);
-    }
-  }
+  return isBlockedAddress(address);
 }
 
 async function readCapped(response: Response, maxBytes: number): Promise<{ text: string; truncated: boolean }> {
@@ -108,7 +66,6 @@ async function readCapped(response: Response, maxBytes: number): Promise<{ text:
  * resolve to a public address, HTML/text content types only, bounded time and size.
  */
 export async function fetchPageGuarded(rawUrl: string, options: FetchPageOptions = {}): Promise<FetchedPage> {
-  const fetchImpl = options.fetchImpl ?? fetch;
   const resolveHost = options.resolveHost ?? (async (host: string) => (await dns.lookup(host, { all: true })).map((entry) => entry.address));
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
   const maxRedirects = options.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
@@ -125,16 +82,21 @@ export async function fetchPageGuarded(rawUrl: string, options: FetchPageOptions
     if (current.protocol !== 'http:' && current.protocol !== 'https:') {
       throw new PageFetchError(`Blocked scheme '${current.protocol}': only http and https are fetched.`);
     }
-    if (current.username || current.password) throw new PageFetchError('Blocked URL: embedded credentials are not allowed.');
-    await assertPublicHost(current.hostname, resolveHost);
+    let addresses: string[];
+    try {
+      // Resolved once per hop with every address checked; the request below connects only to these.
+      addresses = await assertPublicDestination(current, resolveHost);
+    } catch (err: unknown) {
+      if (err instanceof BlockedDestinationError) throw new PageFetchError(`Blocked: ${err.message}`);
+      throw new PageFetchError(`Could not resolve '${current.hostname}': ${err instanceof Error ? err.message : String(err)}`);
+    }
 
     let response: Response;
     try {
-      response = await fetchImpl(current.href, {
-        redirect: 'manual',
-        signal,
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) JarvisLocal/1.0', Accept: 'text/html,application/xhtml+xml,text/plain' },
-      });
+      const headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) JarvisLocal/1.0', Accept: 'text/html,application/xhtml+xml,text/plain' };
+      response = options.fetchImpl
+        ? await options.fetchImpl(current.href, { redirect: 'manual', signal, headers })
+        : await pinnedRequest(current, { signal, headers }, addresses);
     } catch (err: unknown) {
       throw new PageFetchError(`Fetch failed: ${err instanceof Error ? err.message : String(err)}`);
     }

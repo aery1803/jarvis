@@ -4,9 +4,11 @@
  */
 
 import dns from 'node:dns';
-import net from 'node:net';
 import { logger } from '../utils/logger.js';
 import type { SearchResult } from './searxng.js';
+import { assertPublicDestination, isBlockedAddress, isBlockedHostname, pinnedRequest, type HostResolver } from '../security/ssrf.js';
+
+export { isBlockedAddress, isBlockedHostname, type HostResolver };
 
 export type ContentOrigin = 'page' | 'snippet' | 'unavailable';
 
@@ -39,9 +41,6 @@ const DEFAULT_MAX_CHARS = 12_000;
 const DEFAULT_MAX_REDIRECTS = 4;
 const DEFAULT_TIMEOUT_MS = 7_000;
 const ALLOWED_CONTENT_TYPES = ['text/html', 'application/xhtml+xml', 'text/plain'];
-const BLOCKED_HOST_SUFFIXES = ['.localhost', '.local', '.internal', '.localdomain', '.lan', '.home.arpa', '.intranet', '.corp'];
-
-export type HostResolver = (hostname: string) => Promise<string[]>;
 
 export interface ContentDistillerOptions {
   /** Injectable for tests. */
@@ -66,80 +65,6 @@ const defaultResolveHost: HostResolver = async (hostname) => {
   const records = await dns.promises.lookup(hostname, { all: true, verbatim: true });
   return records.map((r) => r.address);
 };
-
-function parseIpv4(address: string): number[] | null {
-  const parts = address.split('.');
-  if (parts.length !== 4) return null;
-  const octets = parts.map((p) => (/^\d{1,3}$/.test(p) ? Number(p) : NaN));
-  return octets.every((o) => o >= 0 && o <= 255) ? octets : null;
-}
-
-function isBlockedIpv4(octets: number[]): boolean {
-  const [a, b, c] = octets;
-  if (a === 0 || a === 10 || a === 127) return true;
-  if (a === 169 && b === 254) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  if (a === 192 && b === 168) return true;
-  if (a === 100 && b >= 64 && b <= 127) return true;
-  if (a === 192 && b === 0 && c === 0) return true;
-  if (a === 198 && (b === 18 || b === 19)) return true;
-  return a >= 224;
-}
-
-function expandIpv6(address: string): number[] | null {
-  let text = address.toLowerCase();
-  const zone = text.indexOf('%');
-  if (zone !== -1) text = text.slice(0, zone);
-  const v4Tail = text.match(/(\d{1,3}(?:\.\d{1,3}){3})$/);
-  if (v4Tail) {
-    const octets = parseIpv4(v4Tail[1]);
-    if (!octets) return null;
-    const hi = ((octets[0] << 8) | octets[1]).toString(16);
-    const lo = ((octets[2] << 8) | octets[3]).toString(16);
-    text = text.slice(0, text.length - v4Tail[1].length) + `${hi}:${lo}`;
-  }
-  const halves = text.split('::');
-  if (halves.length > 2) return null;
-  const head = halves[0] ? halves[0].split(':') : [];
-  const tail = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
-  const missing = 8 - head.length - tail.length;
-  if (halves.length === 1 ? head.length !== 8 : missing < 0) return null;
-  const groups = [...head, ...Array<string>(halves.length === 2 ? missing : 0).fill('0'), ...tail];
-  const words = groups.map((g) => (/^[0-9a-f]{1,4}$/.test(g) ? parseInt(g, 16) : NaN));
-  return words.length === 8 && words.every((w) => !Number.isNaN(w)) ? words : null;
-}
-
-/** True for loopback, private, link-local (incl. cloud metadata 169.254.169.254), CGNAT, multicast and unspecified addresses. */
-export function isBlockedAddress(address: string): boolean {
-  const kind = net.isIP(address);
-  if (kind === 4) {
-    const octets = parseIpv4(address);
-    return octets === null || isBlockedIpv4(octets);
-  }
-  if (kind === 6) {
-    const words = expandIpv6(address);
-    if (!words) return true;
-    const embedsV4 = (): number[] => [words[6] >> 8, words[6] & 0xff, words[7] >> 8, words[7] & 0xff];
-    if (words.slice(0, 5).every((w) => w === 0) && (words[5] === 0xffff || words[5] === 0)) {
-      // ::, ::1, IPv4-mapped (::ffff:a.b.c.d) and deprecated IPv4-compatible forms
-      return words.slice(0, 7).every((w) => w === 0) || isBlockedIpv4(embedsV4());
-    }
-    if (words[0] === 0x64 && words[1] === 0xff9b) return isBlockedIpv4(embedsV4());
-    if ((words[0] & 0xffc0) === 0xfe80) return true;
-    if ((words[0] & 0xfe00) === 0xfc00) return true;
-    if ((words[0] & 0xff00) === 0xff00) return true;
-    return false;
-  }
-  return true;
-}
-
-export function isBlockedHostname(hostname: string): boolean {
-  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
-  if (!host) return true;
-  if (net.isIP(host)) return isBlockedAddress(host);
-  if (host === 'localhost' || !host.includes('.')) return true;
-  return BLOCKED_HOST_SUFFIXES.some((suffix) => host.endsWith(suffix));
-}
 
 function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -189,14 +114,15 @@ function firstBlock(html: string, tag: string): string | null {
 }
 
 export class ContentDistiller {
-  private fetchImpl: typeof fetch;
+  /** Null in production: requests then go through `pinnedRequest`, which connects to the checked address. */
+  private injectedFetch: typeof fetch | null;
   private resolveHost: HostResolver;
   private maxBytes: number;
   private maxChars: number;
   private maxRedirects: number;
 
   constructor(options: ContentDistillerOptions = {}) {
-    this.fetchImpl = options.fetchImpl ?? ((input, init) => fetch(input, init));
+    this.injectedFetch = options.fetchImpl ?? null;
     this.resolveHost = options.resolveHost ?? defaultResolveHost;
     this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
     this.maxChars = options.maxChars ?? DEFAULT_MAX_CHARS;
@@ -325,24 +251,6 @@ export class ContentDistiller {
     return { content: '', url, isUntrusted: true, extractedAt: new Date().toISOString(), origin: 'unavailable', error };
   }
 
-  private async assertPublicDestination(target: URL): Promise<void> {
-    if (target.protocol !== 'http:' && target.protocol !== 'https:') {
-      throw new Error(`blocked scheme ${target.protocol}`);
-    }
-    if (target.username || target.password) {
-      throw new Error('blocked url with embedded credentials');
-    }
-    if (isBlockedHostname(target.hostname)) {
-      throw new Error(`blocked non-public host ${target.hostname}`);
-    }
-    const host = target.hostname.replace(/^\[|\]$/g, '');
-    if (net.isIP(host)) return;
-    const addresses = await this.resolveHost(host);
-    if (addresses.length === 0) throw new Error(`host ${host} did not resolve`);
-    const blocked = addresses.find((a) => isBlockedAddress(a));
-    if (blocked) throw new Error(`blocked: ${host} resolves to non-public address ${blocked}`);
-  }
-
   private async fetchText(
     startUrl: string,
     signal: AbortSignal
@@ -355,13 +263,12 @@ export class ContentDistiller {
     }
 
     for (let hop = 0; hop <= this.maxRedirects; hop++) {
-      await this.assertPublicDestination(current);
-      const response = await this.fetchImpl(current.toString(), {
-        signal,
-        redirect: 'manual',
-        credentials: 'omit',
-        headers: { 'User-Agent': 'JarvisLocal/1.0', Accept: 'text/html,application/xhtml+xml,text/plain;q=0.9' },
-      });
+      // Resolved and validated once per hop (redirects included); the request below may only connect to these.
+      const addresses = await assertPublicDestination(current, this.resolveHost);
+      const headers = { 'User-Agent': 'JarvisLocal/1.0', Accept: 'text/html,application/xhtml+xml,text/plain;q=0.9' };
+      const response = this.injectedFetch
+        ? await this.injectedFetch(current.toString(), { signal, redirect: 'manual', credentials: 'omit', headers })
+        : await pinnedRequest(current, { signal, headers }, addresses);
 
       if (response.status >= 300 && response.status < 400) {
         const location = response.headers.get('location');

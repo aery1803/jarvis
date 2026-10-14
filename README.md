@@ -41,7 +41,7 @@ nodemon
 In 2 seconds, three awesome things wake up at the exact same time:
 1. 🌐 **Web Chat Workstation:** Available in your browser at [`http://localhost:3000`](http://localhost:3000).
 2. 📱 **Telegram Bot:** Ready to chat on your phone via `@aery_jarvis_dev_bot`.
-3. 🤖 **Dev Agent:** Watching your GitHub board to write code and build new features!
+3. 🤖 **Board monitor:** Reads your GitHub board and logs new, moved or removed cards. It is read-only and does not act on cards.
 
 To stop everything, simply press **Ctrl + C** in your terminal.
 
@@ -60,15 +60,50 @@ The sidebar footer shows host RAM (the Windows partition, about 31.65 GB) and, w
 ### 2. Chat on Telegram from Your Phone
 1. Open Telegram on your phone or PC.
 2. Search for your bot: **`@aery_jarvis_dev_bot`**.
-3. Send any of these commands:
-   - `/help` — Shows the cheat sheet of what Jarvis can do.
-   - `/status` — Shows host name, free and total memory, the 14 GB headroom check, and whether the kill switch is armed.
-   - `/models` — Lists all the smart AI models installed.
-   - `/model <name>` — Switches to another installed model (for example `qwen3:32b`).
-   - `/ensemble [on|off|<query>]` — Runs multiple models simultaneously, corroborating candidate answers!
-   - `/benchmark [model]` — Tests reasoning, coding, and speed, giving a real scorecard!
-   - `/research <topic>` — Conducts a deep internet investigation and gives you a summary with sources.
-   - `/kill` — Emergency stop button that halts all background tasks.
+3. Only the owner is served: set `TELEGRAM_OWNER_ID` to your numeric Telegram user id (send `/id` to the bot to see it). Without it the bot refuses everyone except `/id`. `JARVIS_TELEGRAM_OPEN=1` is a development-only switch that serves every user and disables Telegram approvals.
+4. Send any of these commands (any other text is a chat message; a photo is described by an installed vision model):
+
+   | Command | What it does |
+   |---|---|
+   | `/help` (`/start`) | Lists the commands |
+   | `/id` (`/myid`) | Shows your Telegram user id (works for anyone) |
+   | `/status` | Host RAM, VRAM, Ollama, loaded models, kill switch, pending approvals |
+   | `/kill` | Emergency stop: aborts running turns, downloads and tools, denies waiting approvals, blocks new work |
+   | `/resume` | Resets the kill switch (owner only) |
+   | `/models` | Installed models with sizes and which are loaded |
+   | `/model <name\|auto>` | Pins the chat model, or returns to automatic routing |
+   | `/ensemble [on\|off\|<question>]` | Asks several installed models one after another and reports how far they agree |
+   | `/research <topic>` | Web research answered with sources |
+   | `/agents <goal>` | Multi-agent research pipeline |
+   | `/benchmark [model]` | Benchmarks the active or a named model |
+   | `/eval` | Runs the evaluation suite |
+   | `/cost` | Token usage and speed per model |
+   | `/tools`, `/mcp` | Tools with their tiers; MCP servers, tools and failures |
+   | `/skills`, `/skill <description>`, `/skill promote <id>` | List skills; generate and sandbox-test one; activate it |
+   | `/email [sync]` | Lists stored emails (untrusted text) |
+   | `/phone` | Phone status and notifications over adb |
+   | `/memory`, `/forget <key>` | Lists profile facts and vault labels; deletes a fact or vault entry |
+   | `/new [name]`, `/sessions`, `/switch <number\|id>`, `/delete <number\|id>` | Manage sessions |
+   | `/tasks` | Task list with real statuses |
+
+   A Tier 2 action (for example sending an email or running a command that is not on the read-only list) arrives as a message with Approve and Deny buttons. Nothing runs until you tap Approve.
+
+### 3. The Web API
+The web UI uses these endpoints on `http://localhost:3000` (POST and DELETE need the header `X-Jarvis-Client: web`):
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/chat/stream` | Chat turn as server-sent events: `{chunk}`, `{sources}`, `{status}`, `{model}`, `{tool}`, `{error}`, `{partial}`, then `[DONE]` |
+| `GET /api/health`, `GET /api/diagnostics` | Memory, GPU pool and Ollama state (diagnostics are cached for 15 s) |
+| `GET/POST /api/sessions`, `GET /api/sessions/:id/messages`, `DELETE /api/sessions/:id` | Sessions and their messages |
+| `GET /api/status`, `/api/models`, `/api/ledger`, `/api/tools`, `/api/mcp`, `/api/phone` | Runtime state, models, token ledger, tools, MCP servers, phone |
+| `GET /api/approvals`, `POST /api/approvals/:id` | Pending Tier 2 approvals; approve or deny one |
+| `POST /api/kill`, `POST /api/kill/reset` | Engage or reset the kill switch |
+| `POST /api/media/describe` | Describe an image with an installed vision model |
+| `GET/POST /api/skills`, `POST /api/skills/:id/test`, `POST /api/skills/:id/promote` | Skills |
+| `GET/POST /api/benchmark`, `GET/POST /api/eval` | Benchmarks and evaluation (one run at a time) |
+| `POST /api/agents/research` | Multi-agent research |
+| `GET /api/email`, `POST /api/email/ingest`, `POST /api/email/:id/draft`, `POST /api/email/:id/send` | Email (sending needs your approval) |
 
 ---
 
@@ -106,7 +141,7 @@ If you ever want to run just one specific piece of Jarvis:
 
 | Command | What It Runs |
 |---|---|
-| `pnpm start` | **All-in-One:** Starts Web Chat, Telegram Bot, and Dev Agent together! |
+| `pnpm start` | **All-in-One:** Starts Web Chat, Telegram Bot, and the read-only board monitor together! |
 | `pnpm dev` | **Auto-Reload:** Runs all services with `nodemon`, auto-restarting on code changes! |
 | `nodemon` | Same as `pnpm dev` (when using nodemon globally) |
 | `pnpm run web` | Starts only the Web Chat UI on `http://localhost:3000` |
@@ -140,10 +175,13 @@ Every setting is read from the environment first, then from `%USERPROFILE%\.jarv
 | `JARVIS_DEFAULT_MODEL` | `qwen3:8b` | Resident baseline model used when a request names none |
 | `JARVIS_OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama endpoint |
 | `JARVIS_SEARXNG_URL` | `http://127.0.0.1:8080` | SearXNG endpoint |
-| `JARVIS_SEARCH_LIVE_FALLBACK` | `false` | Allow a direct web search when SearXNG is down |
-| `JARVIS_ALLOW_MODEL_PULL` | `false` | Allow automatic model downloads (Tier 2) |
+| `JARVIS_SEARCH_LIVE_FALLBACK` | `false` | Allow a direct DuckDuckGo search (the query leaves your machine) when SearXNG is down |
+| `JARVIS_ALLOW_MODEL_PULL` | `false` | Allow model downloads (Tier 2: each one still needs your approval) |
 | `JARVIS_CONTEXT_TOKENS` | `16384` | Token budget for a chat turn |
-| `JARVIS_MIN_HOST_FREE_GB` | `4` | Minimum free host RAM before heavy actions |
+| `JARVIS_MIN_HOST_FREE_GB` | min(14, 25% of host RAM) | Minimum free host RAM before a model loads; model weights themselves are budgeted against the GPU pool |
+| `TELEGRAM_OWNER_ID` | none | Numeric Telegram user id of the only person the bot serves |
+| `JARVIS_TELEGRAM_OPEN` | off | Development only: serve every Telegram user when no owner is set (disables Telegram approvals) |
+| `JARVIS_VAULT_KEY_PATH` | `~/.jarvis/vault.key` | Where the vault encryption key file lives; `JARVIS_VAULT_KEY` overrides the file |
 | `JARVIS_MCP_SERVERS` | none | JSON array of `{ "name", "command", "args", "env" }` |
 | `JARVIS_WEB_HOST` | `127.0.0.1` | Web UI bind address |
 | `JARVIS_WEB_ALLOWED_IPS` | none | LAN client IPs or IPv4 CIDR ranges (for example `192.168.1.0/24`); required to bind beyond loopback, bad entries stop startup |

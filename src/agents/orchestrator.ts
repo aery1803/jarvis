@@ -139,6 +139,10 @@ function formatCitationList(sources: AgentSource[]): string {
 }
 
 function agreementLine(consensus: AgentConsensus): string {
+  // With nothing to compare there is no agreement figure; a percentage here would read as a measurement.
+  if (consensus.insufficientSources === 'none') return 'Source agreement: not computed, no readable source.';
+  if (consensus.insufficientSources === 'single_source') return 'Source agreement: single source, not corroborated.';
+  if (consensus.insufficientSources === 'same_origin') return 'Source agreement: all sources share one origin, not corroborated.';
   return `Source agreement: ${(consensus.score * 100).toFixed(0)}% (${consensus.status}, ${consensus.independentSources} independent source${consensus.independentSources === 1 ? '' : 's'}).`;
 }
 
@@ -322,7 +326,7 @@ export class MultiAgentOrchestrator {
     }
     const completionCap = Math.min(wantTokens, room);
 
-    let usage: GenerationUsage | undefined;
+    const reported: GenerationUsage[] = [];
     const started = Date.now();
     const text = await provider.generate(prompt, {
       temperature: 0.2,
@@ -330,10 +334,11 @@ export class MultiAgentOrchestrator {
       contextTokens: Math.max(4096, promptEstimate + completionCap + 512),
       signal: run.signal,
       onUsage: (u) => {
-        usage = u;
+        reported.push(u);
       },
     });
     const latencyMs = Date.now() - started;
+    const usage: GenerationUsage | undefined = reported[reported.length - 1];
 
     const promptTokens = usage?.promptTokens ?? promptEstimate;
     const completionTokens = usage?.completionTokens ?? estimateTokens(text);
@@ -419,6 +424,7 @@ export class MultiAgentOrchestrator {
     const consensus: AgentConsensus = {
       status: evaluation.status,
       score: evaluation.confidence,
+      ...(evaluation.insufficientSources ? { insufficientSources: evaluation.insufficientSources } : {}),
       independentSources: independent,
       summary: evaluation.notes ?? '',
     };
@@ -558,7 +564,7 @@ export class MultiAgentOrchestrator {
         sources,
         verification: verified ? r2.output : `Verification did not run: ${r2.error ?? r2.status}. Treat all claims as unverified.`,
         consensus: r2.consensus,
-        consensusScore: r2.consensus?.score,
+        consensusScore: r2.consensus?.insufficientSources ? undefined : r2.consensus?.score,
         isTainted: r1.isTainted || r2.isTainted,
       },
       isTainted: r1.isTainted || r2.isTainted,

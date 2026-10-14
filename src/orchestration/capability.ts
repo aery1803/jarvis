@@ -1,5 +1,6 @@
 import os from 'node:os';
 import type { ModelDefinition } from './registry.js';
+import { canonicalizeTag } from './lanes.js';
 
 const GIB = 1024 * 1024 * 1024;
 
@@ -15,7 +16,19 @@ export interface CapabilityCheckResult {
   headroomBytes: number;
   headroomGb: number;
   vramFreeBytes: number | null;
+  /** True when the model is already resident in Ollama, so loading it takes no new VRAM. */
+  alreadyResident?: boolean;
+  /** Resident models Ollama has to unload to make room (they are idle: the governor serialises heavy turns). */
+  evicts?: string[];
+  /** Plain-words explanation of how the VRAM verdict was reached (resident, eviction needed, free as is). */
+  note?: string;
   reason?: string;
+}
+
+/** A model Ollama currently holds, from `/api/ps`; `sizeVramBytes` is the part resident in VRAM. */
+export interface ResidentModel {
+  name: string;
+  sizeVramBytes: number | null;
 }
 
 export interface CapabilityCheckerOptions {
@@ -33,6 +46,8 @@ export class CapabilityChecker {
   private vramMarginBytes: number;
   private unknownVramPolicy: 'host-only' | 'allow';
   private vramFreeBytes: number | null = null;
+  private vramTotalBytes: number | null = null;
+  private resident: ResidentModel[] = [];
 
   constructor(options: CapabilityCheckerOptions = {}) {
     const envGb = Number.parseFloat((options.env ?? process.env).JARVIS_MIN_HOST_FREE_GB ?? '');
@@ -57,6 +72,23 @@ export class CapabilityChecker {
 
   getVramFree(): number | null {
     return this.vramFreeBytes;
+  }
+
+  /** Total VRAM of the pool; null means unknown. Caps what resident models can be counted as giving back. */
+  setVramTotal(bytes: number | null): void {
+    this.vramTotalBytes = bytes !== null && Number.isFinite(bytes) && bytes > 0 ? bytes : null;
+  }
+
+  /**
+   * What Ollama holds right now (`/api/ps`). The free-VRAM probe already excludes these bytes, so without this a
+   * model that is resident would be counted against the space it occupies itself.
+   */
+  setResidentModels(models: ResidentModel[]): void {
+    this.resident = models.map((entry) => ({ name: entry.name, sizeVramBytes: entry.sizeVramBytes }));
+  }
+
+  getResidentModels(): ResidentModel[] {
+    return this.resident.map((entry) => ({ ...entry }));
   }
 
   /**
@@ -102,17 +134,41 @@ export class CapabilityChecker {
     const hostExhausted = `Host memory headroom exhausted: ${gb(freeBytes)} GB free, minimum required is ${(floor / GIB).toFixed(1)} GB.`;
 
     if (vramFree !== null) {
-      const vramAfter = vramFree - requiredBytes - this.vramMarginBytes;
+      // Ollama unloads idle models when it needs room, and the governor never runs two heavy turns at once, so the
+      // bytes held by resident models are available to the target. Free VRAM only decides whether an eviction happens.
+      const residentBytes = this.resident.reduce((sum, entry) => sum + (entry.sizeVramBytes ?? 0), 0);
+      const canonical = canonicalizeTag(model.id);
+      const self = this.resident.find((entry) => canonicalizeTag(entry.name) === canonical);
+      const rawAvailable = vramFree + residentBytes;
+      const available = this.vramTotalBytes === null ? rawAvailable : Math.min(rawAvailable, this.vramTotalBytes);
+      const vramAfter = available - requiredBytes - this.vramMarginBytes;
+      const others = this.resident.filter((entry) => entry !== self && (entry.sizeVramBytes ?? 0) > 0).map((entry) => entry.name);
+
+      if (self) {
+        // Already loaded: it needs no new weights, so neither the VRAM budget nor the host floor can refuse it.
+        return {
+          ...build(true, 'vram', vramAfter, undefined),
+          alreadyResident: true,
+          note: `${model.id} is already resident in VRAM (${gb(self.sizeVramBytes ?? 0)} GB), so it needs no new load.`,
+        };
+      }
       if (freeBytes < floor) return build(false, 'vram', vramAfter, hostExhausted);
       if (vramAfter < 0) {
         return build(
           false,
           'vram',
           vramAfter,
-          `Insufficient VRAM: ${model.id} needs ${(requiredBytes / GIB).toFixed(2)} GB plus a ${(this.vramMarginBytes / GIB).toFixed(2)} GB margin, but only ${gb(vramFree)} GB of VRAM is free.`,
+          `Insufficient VRAM: ${model.id} needs ${(requiredBytes / GIB).toFixed(2)} GB plus a ${(this.vramMarginBytes / GIB).toFixed(2)} GB margin, but only ${gb(available)} GB of VRAM is available${residentBytes > 0 ? ` (${gb(vramFree)} GB free plus ${gb(residentBytes)} GB held by resident ${others.join(', ')})` : ''}.`,
         );
       }
-      return build(true, 'vram', vramAfter);
+      const needsEviction = requiredBytes + this.vramMarginBytes > vramFree;
+      return {
+        ...build(true, 'vram', vramAfter),
+        ...(needsEviction ? { evicts: others } : {}),
+        note: needsEviction
+          ? `${gb(vramFree)} GB of VRAM is free but ${model.id} needs ${gb(requiredBytes + this.vramMarginBytes)} GB, so Ollama will unload ${others.join(', ') || 'idle models'} first.`
+          : `${gb(vramFree)} GB of VRAM is free, enough for ${model.id} without unloading anything.`,
+      };
     }
 
     if (this.unknownVramPolicy === 'allow') {

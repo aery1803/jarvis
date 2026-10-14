@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { DocumentStore, Collection } from '../storage/collection.js';
 import { newestFirst } from '../utils/ordering.js';
 import { redactSensitive } from '../memory/sensitive.js';
+import type { EpisodicMemory, SessionSummary } from '../memory/types.js';
 import type {
   ActiveSessionPointer,
   ImportedJarvisMessage,
@@ -61,6 +62,10 @@ export class SessionManager {
   private taskCollection: Collection<JarvisTask>;
   private messageCollection: Collection<JarvisMessage>;
   private activeSessionCollection: Collection<ActiveSessionPointer>;
+  // The memory tiers keep per-session rows in these collections (`MemoryManager`); deleting a session removes them
+  // in the same transaction so nothing from a deleted conversation keeps reaching other sessions.
+  private summaryCollection: Collection<SessionSummary>;
+  private episodicCollection: Collection<EpisodicMemory>;
   private lastTaskNumber = 0;
   private runningTasks = new Map<string, AbortController>();
 
@@ -69,6 +74,8 @@ export class SessionManager {
     this.taskCollection = this.store.getCollection<JarvisTask>('tasks');
     this.messageCollection = this.store.getCollection<JarvisMessage>('messages');
     this.activeSessionCollection = this.store.getCollection<ActiveSessionPointer>('active_sessions');
+    this.summaryCollection = this.store.getCollection<SessionSummary>('session_summaries');
+    this.episodicCollection = this.store.getCollection<EpisodicMemory>('episodic_memories');
   }
 
   // --- Session Management ---
@@ -107,8 +114,9 @@ export class SessionManager {
 
   /**
    * Removes the session and everything that points at it in one transaction, children first, so a failure
-   * midway leaves the whole session in place instead of orphaned rows. Work still running for the
-   * session's tasks is aborted.
+   * midway leaves the whole session in place instead of orphaned rows. The session's T2 summaries and T3 episodes
+   * go with it (research knowledge is shared web text keyed by content, not part of a conversation, so it stays).
+   * Work still running for the session's tasks is aborted.
    */
   async deleteSession(userId: string, sessionId: string): Promise<boolean> {
     if (!userId || !sessionId) {
@@ -121,6 +129,8 @@ export class SessionManager {
       }
       for (const task of this.taskCollection.find({ userId, sessionId })) taskIds.push(task.id);
       this.messageCollection.deleteMany({ userId, sessionId });
+      this.summaryCollection.deleteMany({ userId, sessionId });
+      this.episodicCollection.deleteMany({ userId, sessionId });
       this.taskCollection.deleteMany({ userId, sessionId });
       this.activeSessionCollection.deleteMany({ userId, sessionId });
       this.sessionCollection.deleteOne({ userId, id: sessionId });
@@ -132,8 +142,8 @@ export class SessionManager {
     return deleted;
   }
 
-  /** Removes messages, tasks and active pointers whose session no longer exists (left by older, non-atomic deletes). */
-  async purgeOrphanedRows(): Promise<{ messages: number; tasks: number; pointers: number }> {
+  /** Removes messages, tasks, summaries, episodes and active pointers whose session no longer exists (left by older, non-atomic deletes). */
+  async purgeOrphanedRows(): Promise<{ messages: number; tasks: number; pointers: number; memories: number }> {
     return this.store.transaction(() => {
       const sessionIds = new Set(this.sessionCollection.find().map((session) => session.id));
       const purge = <T extends { id?: string | number; sessionId: string }>(collection: Collection<T>): number => {
@@ -147,6 +157,7 @@ export class SessionManager {
         messages: purge(this.messageCollection),
         tasks: purge(this.taskCollection),
         pointers: purge(this.activeSessionCollection),
+        memories: purge(this.summaryCollection) + purge(this.episodicCollection),
       };
     });
   }
@@ -449,6 +460,22 @@ export class SessionManager {
     let count = 0;
     for (const status of ACTIVE_STATUSES) {
       for (const task of this.taskCollection.find({ status })) {
+        if (this.transition(task.id, ACTIVE_STATUSES, 'cancelled', undefined, reason)) count++;
+      }
+    }
+    return count;
+  }
+
+  /**
+   * Startup reconciliation: a crash or restart leaves tasks `queued`, `running` or `waiting_approval` although
+   * nothing is working on them, so `/tasks` would list them as active forever. They become `cancelled` with `reason`.
+   * Tasks this process is running right now are left alone.
+   */
+  async reconcileInterruptedTasks(reason = 'Interrupted by restart'): Promise<number> {
+    let count = 0;
+    for (const status of ACTIVE_STATUSES) {
+      for (const task of this.taskCollection.find({ status })) {
+        if (this.runningTasks.has(task.id)) continue;
         if (this.transition(task.id, ACTIVE_STATUSES, 'cancelled', undefined, reason)) count++;
       }
     }

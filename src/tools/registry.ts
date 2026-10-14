@@ -10,12 +10,10 @@ import type { ToolDefinition, ModelFunctionSchema, ToolSource } from './types.js
 import { SearXNGClient } from '../services/searxng.js';
 import type { SearchOutcome } from '../services/searxng.js';
 import { logger } from '../utils/logger.js';
+import { isSecretPath } from '../security/secret-paths.js';
 
 const TOOL_NAME = /^[A-Za-z0-9_.:-]{1,64}$/;
 const MAX_FILE_READ_BYTES = 200 * 1024;
-const SECRET_EXTENSIONS = ['.db', '.sqlite', '.sqlite3', '.db-wal', '.db-shm', '.db-journal', '.pem', '.key', '.pfx', '.p12', '.crt', '.keystore'];
-const SECRET_BASENAMES = new Set(['.env', 'settings.env', 'credentials.json', '.npmrc', 'id_rsa', 'id_ed25519', '.netrc']);
-const SECRET_DIRECTORIES = new Set(['.git', '.ssh']);
 
 const STOP_WORDS = new Set([
   'the', 'and', 'for', 'with', 'what', 'whats', 'how', 'can', 'you', 'please', 'tell', 'show', 'give', 'about', 'that', 'this',
@@ -41,21 +39,6 @@ export interface PathCheck {
   ok: boolean;
   path?: string;
   reason?: string;
-}
-
-function isSecretPath(relativePath: string): boolean {
-  const segments = relativePath.split(/[\\/]+/).filter(Boolean).map((s) => s.toLowerCase());
-  if (segments.length === 0) {
-    return false;
-  }
-  const base = segments[segments.length - 1];
-  return (
-    segments[0] === 'data' ||
-    segments.some((s) => SECRET_DIRECTORIES.has(s)) ||
-    SECRET_BASENAMES.has(base) ||
-    base.startsWith('.env.') ||
-    SECRET_EXTENSIONS.some((ext) => base.endsWith(ext))
-  );
 }
 
 /**

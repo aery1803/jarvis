@@ -90,4 +90,27 @@ describe('CascadeRouter', () => {
     assert.equal(d.canRun, false);
     assert.match(d.reason ?? '', /embedding/);
   });
+
+  test('with the pool nearly full of an idle 14B, a 32B request is kept and the rationale says what is unloaded', async () => {
+    const { router, checker } = setup(32, ALL_INSTALLED);
+    checker.setVramTotal(24 * GIB);
+    checker.setResidentModels([{ name: 'qwen3:14b', sizeVramBytes: 9.5 * GIB }]);
+    checker.setVramFree(24 * GIB - 9.5 * GIB);
+    const d = await router.route({ prompt: 'x', preferredModel: 'qwen3:32b' });
+    assert.equal(d.chosenModel?.id, 'qwen3:32b');
+    assert.equal(d.isFallback, false);
+    assert.match(d.fitNote ?? '', /Ollama will unload qwen3:14b/);
+    assert.match(d.rationale, /Ollama will unload qwen3:14b/);
+  });
+
+  test('a preferred model that is already resident is chosen again and says so', async () => {
+    const { router, checker } = setup(32, ALL_INSTALLED);
+    checker.setVramTotal(24 * GIB);
+    checker.setResidentModels([{ name: 'qwen3:32b', sizeVramBytes: 21 * GIB }]);
+    checker.setVramFree(3 * GIB);
+    const d = await router.route({ prompt: 'x', preferredModel: 'qwen3:32b' });
+    assert.equal(d.chosenModel?.id, 'qwen3:32b');
+    assert.match(d.fitNote ?? '', /already resident/);
+  });
 });
+

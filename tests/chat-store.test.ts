@@ -5,7 +5,7 @@
 
 import { test, describe, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { ChatStore } from '../src/storage/chat-store.js';
+import { ChatStore, DEFAULT_CHAT_MODEL, resolveDefaultChatModel } from '../src/storage/chat-store.js';
 import { DocumentStore } from '../src/storage/collection.js';
 import { SessionManager } from '../src/sessions/manager.js';
 
@@ -112,7 +112,7 @@ describe('ChatStore over a shared SessionManager', () => {
     assert.equal(webSessions.length, 1);
     assert.equal(webSessions[0].id, telegramSession.id);
     assert.equal(webSessions[0].title, 'Default Session');
-    assert.equal(webSessions[0].model, 'qwen2.5:7b', 'sessions without a stored model report the default');
+    assert.equal(webSessions[0].model, 'qwen3:8b', 'sessions without a stored model report the installed baseline model');
 
     const messages = await chat.getMessages(telegramSession.id);
     assert.deepEqual(
@@ -139,5 +139,30 @@ describe('ChatStore over a shared SessionManager', () => {
     chat.close();
     const session = await sessions.createSession(ownerId, 'Still writable');
     assert.ok(await sessions.getSession(ownerId, session.id));
+  });
+});
+
+describe('ChatStore default model', () => {
+  test('defaults to the installed baseline model, not qwen2.5:7b', async () => {
+    assert.equal(DEFAULT_CHAT_MODEL, 'qwen3:8b');
+    const store = new ChatStore(':memory:');
+    const session = await store.createSession('No model given');
+    assert.equal(session.model, 'qwen3:8b');
+    assert.equal(store.getDefaultModel(), 'qwen3:8b');
+  });
+
+  test('the default is configurable per store and through JARVIS_DEFAULT_CHAT_MODEL', async () => {
+    const store = new ChatStore(':memory:', 'owner', { defaultModel: 'qwen3:14b' });
+    assert.equal((await store.createSession('x')).model, 'qwen3:14b');
+    assert.equal(resolveDefaultChatModel({ JARVIS_DEFAULT_CHAT_MODEL: ' qwen3:32b ' }), 'qwen3:32b');
+    assert.equal(resolveDefaultChatModel({ JARVIS_DEFAULT_CHAT_MODEL: '  ' }), 'qwen3:8b');
+    assert.equal(resolveDefaultChatModel({}), 'qwen3:8b');
+  });
+
+  test('a stored empty model falls back to the default', async () => {
+    const sessions = new SessionManager(new DocumentStore(':memory:'));
+    const created = await sessions.createSession('owner', 'Blank model', { model: '' });
+    const store = new ChatStore(sessions, 'owner', { defaultModel: 'qwen3:14b' });
+    assert.equal((await store.getSession(created.id))?.model, 'qwen3:14b');
   });
 });

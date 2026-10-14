@@ -38,6 +38,8 @@ export interface EnsembleResult {
   /** True only when at least two models answered. */
   corroborated?: boolean;
   skipped?: Array<{ model: string; reason: string }>;
+  /** True when a stop ended the run before every candidate had its turn. */
+  aborted?: boolean;
 }
 
 export interface EnsembleOptions extends CognitionOptions {
@@ -45,6 +47,8 @@ export interface EnsembleOptions extends CognitionOptions {
   maxTokens?: number;
   /** Per-model wait for the heavy-model lease. */
   leaseTimeoutMs?: number;
+  /** The kill switch or a Stop: ends the run between candidates, leaves the lease queue, and aborts the model call in flight. */
+  signal?: AbortSignal;
 }
 
 export interface MultiModelEnsembleOptions {
@@ -127,7 +131,12 @@ export class MultiModelEnsemble {
       settled.push({ model, answer: '', latencyMs: 0, status: 'skipped', error: reason });
     };
 
+    let aborted = false;
     for (const modelName of targetModels) {
+      if (options.signal?.aborted) {
+        aborted = true;
+        break;
+      }
       const def = this.registry.getModel(modelName);
       if (!def) {
         skip(modelName, 'unknown model: its memory requirement cannot be budgeted');
@@ -145,12 +154,17 @@ export class MultiModelEnsemble {
         const provider = this.options.providerFactory
           ? this.options.providerFactory(tag)
           : new OllamaProvider({ baseUrl: config.ollamaBaseUrl, model: tag });
-        const answer = await this.governor.withLease(def, () => provider.generate(fullPrompt, { maxTokens: options.maxTokens ?? 512 }), {
+        const answer = await this.governor.withLease(def, () => provider.generate(fullPrompt, { maxTokens: options.maxTokens ?? 512, signal: options.signal }), {
           timeoutMs: options.leaseTimeoutMs,
+          signal: options.signal,
         });
         settled.push({ model: modelName, answer: answer.trim(), latencyMs: Date.now() - modelStart, status: 'fulfilled' });
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
+        if (options.signal?.aborted) {
+          aborted = true;
+          break;
+        }
         if (err instanceof LeaseDeniedError) {
           definitions.delete(modelName);
           skip(modelName, err.reason);
@@ -170,6 +184,9 @@ export class MultiModelEnsemble {
     const totalLatencyMs = Date.now() - startTime;
     const fulfilled = settled.filter((c) => c.status === 'fulfilled' && c.answer.length > 0);
 
+    if (fulfilled.length === 0 && aborted) {
+      throw new Error('The ensemble was stopped before any model answered.');
+    }
     if (fulfilled.length === 0) {
       const detail = settled.map((c) => `${c.model}: ${c.error ?? 'empty answer'}`).join('; ');
       throw new Error(`All ensemble models failed to generate an answer. ${detail}`);
@@ -228,6 +245,7 @@ export class MultiModelEnsemble {
       modelsUsed: fulfilled.map((c) => c.model),
       skipped,
       totalLatencyMs,
+      ...(aborted ? { aborted: true } : {}),
     };
   }
 
@@ -239,7 +257,7 @@ export class MultiModelEnsemble {
     const agreement = corroborated
       ? `Answer agreement: ${(result.consensusScore * 100).toFixed(0)}% (word overlap between models, not a fact check)`
       : 'Not corroborated: only one model answered';
-    const skippedNote = (result.skipped ?? []).map((s) => `\`${s.model}\` skipped (${s.reason})`).join(', ');
+    const skippedNote = [...(result.skipped ?? []).map((s) => `\`${s.model}\` skipped (${s.reason})`), ...(result.aborted ? ['stopped early: the remaining models did not run'] : [])].join(', ');
 
     if (!showComparison || result.candidates.length <= 1) {
       return (

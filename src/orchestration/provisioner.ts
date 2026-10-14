@@ -31,7 +31,12 @@ export interface ProvisionRequest {
   allowPull?: boolean;
   /** `sizeBytes` is 0 when the size is unknown. */
   confirmPull?: (modelId: string, sizeBytes: number) => Promise<boolean>;
+  /** Status lines for the owner, including download progress while a model is pulled. */
   onProgress?: (message: string) => Promise<void> | void;
+  /** Aborts an in-flight model download (the kill switch and a stopped turn use it). */
+  signal?: AbortSignal;
+  /** Overrides the provider's own download time limit. */
+  pullTimeoutMs?: number;
 }
 
 export interface ProvisionDecision {
@@ -282,8 +287,20 @@ export class ModelProvisioner {
         if (approved) {
           logger.info(`[ModelProvisioner] Pulling ${wanted} with owner approval (${sizeLabel}).`);
           await request.onProgress?.(`Downloading \`${wanted}\` (${sizeLabel}) with your approval. This can take a while.`);
-          const pulled = await this.provider.pullModel(wanted);
-          if (pulled) {
+          let lastReported = -Infinity;
+          const pulled = await this.provider.pullModel(wanted, {
+            signal: request.signal,
+            timeoutMs: request.pullTimeoutMs,
+            onProgress: (progress) => {
+              // Ollama emits a line per chunk; report at most one status per 5% step to keep the stream readable.
+              if (progress.percent === undefined || progress.percent < lastReported + 5) return;
+              lastReported = progress.percent;
+              void Promise.resolve(request.onProgress?.(`Downloading \`${wanted}\`: ${progress.percent}%`)).catch(() => undefined);
+            },
+          });
+          if (request.signal?.aborted) {
+            notes.push(`Downloading ${wanted} was stopped.`);
+          } else if (pulled) {
             this.registry.markInstalled(wanted, wantedDef?.diskSizeBytes ?? null);
             installedOnDemand = true;
             await request.onProgress?.(`Model installed: \`${wanted}\`.`);
@@ -315,7 +332,7 @@ export class ModelProvisioner {
     this.provider.setModel?.(targetModel);
 
     const rationale = sameAsWanted
-      ? [...notes, `${classification.rationale}${installedOnDemand ? ' (Installed on-demand with approval).' : this.registry.hasInstalledInfo() ? ' (Already installed).' : ''}`].join(' ')
+      ? [...notes, `${classification.rationale}${installedOnDemand ? ' (Installed on-demand with approval).' : this.registry.hasInstalledInfo() ? ' (Already installed).' : ''}`, route.fitNote ?? ''].filter(Boolean).join(' ')
       : `${[...notes, route.rationale].join(' ')} Using ${chosen.name} instead of ${wanted || 'a vision model'}.`;
 
     return {

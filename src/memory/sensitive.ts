@@ -7,7 +7,7 @@
  * false positive only routes a fact to the vault.
  */
 
-export type SensitiveKind = 'password' | 'api-key' | 'token' | 'card-number' | 'ssn';
+export type SensitiveKind = 'password' | 'api-key' | 'token' | 'card-number' | 'ssn' | 'private-key';
 
 export interface SensitiveMatch {
   kind: SensitiveKind;
@@ -33,8 +33,32 @@ const TOKEN_PATTERNS: Array<{ kind: SensitiveKind; pattern: RegExp }> = [
   { kind: 'ssn', pattern: /\b\d{3}-\d{2}-\d{4}\b/g },
 ];
 
+/**
+ * A label (`password`, `OPENAI_API_KEY`, `client_secret`...) followed by `is`/`=`/`:` and a value. The prefix and
+ * suffix groups let env-var style names match, which a `\b` boundary cannot because `_` is a word character.
+ * The value is a quoted string (spaces allowed) or one unquoted token; see `passphraseEnd` for the unquoted
+ * password case.
+ */
 const LABELLED_SECRET =
-  /\b(pass(?:word|wd|phrase|code)?|pwd|pin|secret|api[ _-]?key|access[ _-]?key|auth(?:entication)?[ _-]?token|token|credentials?)\b(?:\s+\w+){0,4}?\s*(?:is|are|=|:)\s*(["']?)([^\s"',;]{3,})\2/gi;
+  /(?<![A-Za-z0-9])(?:[A-Za-z0-9]+[_-])*(pass(?:word|wd|phrase|code)?|pwd|pin|secret|api[ _-]?key|access[ _-]?key|auth(?:entication)?[ _-]?token|token|credentials?)(?:[_-][A-Za-z0-9]+)*(?![A-Za-z0-9])(?:\s+\w+){0,4}?\s*(?:is|are|=|:)\s*(?:"([^"\n]{3,})"|'([^'\n]{3,})'|([^\s"',;]{3,}))/gi;
+
+/** `scheme://user:password@host`: only the password is secret. */
+const URL_USERINFO = /\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:([^\s@/]+)@/gi;
+
+const PEM_PRIVATE_KEY = /-----BEGIN [A-Z ]*PRIVATE KEY(?: BLOCK)?-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY(?: BLOCK)?-----|$)/g;
+
+const MAX_PASSPHRASE_CHARS = 200;
+
+/**
+ * An unquoted password or passphrase may be several words ("correct horse battery staple"), so it runs to the end
+ * of the sentence or line. Over-redacting trailing words is the safe side of the trade.
+ */
+function passphraseEnd(text: string, valueStart: number): number {
+  const rest = text.slice(valueStart, valueStart + MAX_PASSPHRASE_CHARS);
+  const stop = /[.!?](?=\s|$)|\r?\n/.exec(rest);
+  const end = valueStart + (stop ? stop.index : rest.length);
+  return text.slice(valueStart, end).trimEnd().length + valueStart;
+}
 
 const CARD_CANDIDATE = /\b(?:\d[ -]?){13,19}\b/g;
 
@@ -69,11 +93,23 @@ export function detectSensitive(text: string): SensitiveScan {
     }
   }
 
+  for (const match of text.matchAll(PEM_PRIVATE_KEY)) {
+    matches.push({ kind: 'private-key', start: match.index ?? 0, end: (match.index ?? 0) + match[0].length });
+  }
+
+  for (const match of text.matchAll(URL_USERINFO)) {
+    const start = (match.index ?? 0) + match[0].length - 1 - match[1].length;
+    matches.push({ kind: 'password', start, end: start + match[1].length });
+  }
+
   for (const match of text.matchAll(LABELLED_SECRET)) {
     const label = match[1].toLowerCase();
     const kind: SensitiveKind = label.startsWith('pass') || label === 'pwd' || label === 'pin' || label === 'secret' ? 'password' : /key/.test(label) ? 'api-key' : 'token';
-    const valueStart = (match.index ?? 0) + match[0].lastIndexOf(match[3]);
-    matches.push({ kind, start: valueStart, end: valueStart + match[3].length });
+    const value = match[2] ?? match[3] ?? match[4];
+    const quoted = match[4] === undefined;
+    const valueStart = (match.index ?? 0) + match[0].lastIndexOf(value);
+    const end = kind === 'password' && !quoted ? passphraseEnd(text, valueStart) : valueStart + value.length;
+    matches.push({ kind, start: valueStart, end });
   }
 
   matches.sort((a, b) => a.start - b.start || b.end - a.end);

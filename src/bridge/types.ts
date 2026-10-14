@@ -28,10 +28,16 @@ export interface ScreenState {
 export interface MobileDeviceStatus {
   deviceId: string;
   platform: 'android' | 'ios';
-  batteryLevel: number;
-  isCharging: boolean;
+  /** Null when the battery could not be read; never a placeholder 0. */
+  batteryLevel: number | null;
+  isCharging: boolean | null;
   connected: boolean;
-  lastSyncTime: string;
+  /** When this status was actually read; null when it never was. */
+  lastSyncTime: string | null;
+  /** The transport's own state for the device (for adb: device, offline, unauthorized, unreadable...). */
+  state?: string;
+  /** Why the numbers above are null; set whenever the device could not be read. */
+  unavailableReason?: string;
 }
 
 export interface MobileNotification {

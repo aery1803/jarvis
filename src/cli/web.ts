@@ -3,48 +3,62 @@
  * Authority: FEAT-004
  */
 
-import path from 'node:path';
 import { JarvisWebServer, installProcessGuard } from '../web/server.js';
-import { DocumentStore } from '../storage/collection.js';
-import { SessionManager } from '../sessions/manager.js';
-import { DEFAULT_CHAT_USER_ID } from '../storage/chat-store.js';
-import { migrateLegacyChatDb } from '../storage/chat-migration.js';
-import { getTelegramOwnerId } from '../security/credentials.js';
+import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
+import { createLauncherRuntime, errorMessage, importLegacyChat, resolveWebPort, startWebServer } from './bootstrap.js';
 
-const parsedPort = Number.parseInt(process.env.PORT ?? '', 10);
-const port = Number.isInteger(parsedPort) && parsedPort >= 0 && parsedPort < 65536 ? parsedPort : 3000;
-// Same store and owner ID as `start-all.ts`, so sessions are shared with Telegram whichever launcher runs.
-const dataDir = path.resolve(process.cwd(), 'data');
-const store = new DocumentStore(path.join(dataDir, 'jarvis.db'));
-const sessionManager = new SessionManager(store);
-const userId = getTelegramOwnerId() || DEFAULT_CHAT_USER_ID;
-const server = new JarvisWebServer({ port, sessionManager, userId });
-
-async function main() {
+async function main(): Promise<void> {
   installProcessGuard();
   console.log('\n======================================================');
   console.log('       JARVIS LOCAL AI AGENT - WEB WORKSTATION        ');
   console.log('======================================================\n');
 
+  // Same runtime, store and owner id as `start-all.ts`, so sessions and memory are shared with Telegram whichever launcher runs.
+  const launcher = await createLauncherRuntime({ reconcileInterruptedTasks: false });
+  const { rt, dataDir } = launcher;
+  await importLegacyChat(rt, dataDir);
+
+  const port = resolveWebPort();
+  const webOptions = {
+    port,
+    runtime: rt,
+    sessionManager: rt.sessions,
+    memoryManager: rt.memory,
+    userId: rt.ownerUserId,
+    killSwitch: rt.killSwitch,
+    ollamaBaseUrl: config.ollamaBaseUrl,
+    defaultModel: config.defaultModel,
+  };
+  const server = new JarvisWebServer(webOptions);
   try {
-    await migrateLegacyChatDb({ legacyDbPath: path.join(dataDir, 'chat.db'), store, sessionManager, userId });
+    await startWebServer(server, port);
   } catch (err: unknown) {
-    logger.error(`[ChatMigration] data/chat.db import failed; it is retried on the next start: ${err instanceof Error ? err.message : String(err)}`);
+    logger.error(errorMessage(err));
+    await launcher.close();
+    process.exit(1);
   }
-  await server.start();
-  console.log(`🚀 Claude/Gemini-Style Web Chat available at: http://localhost:${port}\n`);
+  console.log(`Web chat available at: http://localhost:${port}\n`);
   console.log('Press Ctrl+C to stop the server.\n');
 
-  process.on('SIGINT', async () => {
+  let stopping = false;
+  const shutdown = async (): Promise<void> => {
+    if (stopping) return;
+    stopping = true;
     console.log('\n[JarvisWebServer] Gracefully shutting down...');
-    await server.stop();
-    store.close();
+    try {
+      await server.stop();
+    } catch (err: unknown) {
+      logger.warn(`[JarvisWebServer] Stopping the server failed: ${errorMessage(err)}`);
+    }
+    await launcher.close();
     process.exit(0);
-  });
+  };
+  process.on('SIGINT', () => void shutdown());
+  process.on('SIGTERM', () => void shutdown());
 }
 
-main().catch((err) => {
-  logger.error(`Fatal error in Web Server: ${err.message}`);
+main().catch((err: unknown) => {
+  logger.error(`Fatal error in Web Server: ${errorMessage(err)}`);
   process.exit(1);
 });

@@ -8,102 +8,116 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <div class="app-layout">
-    <!-- Sidebar -->
-    <aside class="sidebar" id="sidebar">
-      <div class="sidebar-header">
-        <div class="logo">
-          <span class="logo-icon">⚡</span>
-          <span class="logo-text">Jarvis Local</span>
-        </div>
-        <button class="new-chat-btn" id="newChatBtn">+ New Chat</button>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="logo">
+        <span class="logo-icon" aria-hidden="true">⚡</span>
+        <span class="logo-text">Jarvis Local</span>
       </div>
-
-      <div class="sidebar-section">
-        <label for="modelSelect" class="section-label">Model Lane</label>
-        <select id="modelSelect" class="model-select">
-          <option value="" disabled selected>Loading models...</option>
-        </select>
-      </div>
-
-      <div class="sidebar-section toggle-section">
-        <label class="toggle-container">
-          <input type="checkbox" id="researchToggle" checked>
-          <span class="toggle-slider"></span>
-          <span class="toggle-label">Web Research (SearXNG)</span>
-        </label>
-      </div>
-
-      <div class="sidebar-section">
-        <button id="benchmarkBtn" class="benchmark-btn">
-          <span>⚡</span>
-          <span id="benchmarkBtnText">Benchmark Model</span>
-        </button>
-      </div>
-
-      <div class="session-history-title">Recent Chats</div>
-      <div class="session-list" id="sessionList">
-        <!-- Dynamically populated -->
-      </div>
-
-      <div class="sidebar-footer">
-        <div class="status-indicator">
+      <nav class="tabs" role="tablist" aria-label="Jarvis sections">
+        <button type="button" class="tab is-active" id="tabChat" role="tab" aria-selected="true" aria-controls="panelChat" data-testid="tab-chat">Chat</button>
+        <button type="button" class="tab" id="tabDashboard" role="tab" aria-selected="false" aria-controls="panelDashboard" tabindex="-1" data-testid="tab-dashboard">Dashboard</button>
+      </nav>
+      <div class="topbar-status">
+        <div class="status-indicator" data-testid="health-status">
           <span class="status-dot is-unknown" id="statusDot"></span>
           <span class="status-text" id="statusText">Checking status...</span>
         </div>
       </div>
-    </aside>
+    </header>
 
-    <!-- Main Chat Workspace -->
-    <main class="chat-workspace">
-      <div class="kill-banner" id="killBanner" role="alert" hidden></div>
-      <header class="chat-header">
-        <div class="header-info">
-          <h2 id="currentChatTitle">New Conversation</h2>
-          <span class="current-model-tag" id="currentModelTag"></span>
+    <div class="kill-banner" id="killBanner" role="alert" data-testid="kill-banner" hidden></div>
+    <section class="approval-banner" id="approvalBanner" aria-live="assertive" aria-label="Pending approvals" data-testid="approval-banner" hidden></section>
+
+    <!-- Chat -->
+    <div class="app-layout" id="panelChat" role="tabpanel" aria-labelledby="tabChat" data-testid="panel-chat">
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+          <button class="new-chat-btn" id="newChatBtn" data-testid="new-chat">+ New Chat</button>
         </div>
-      </header>
 
-      <div class="messages-container" id="messagesContainer">
-        <div class="welcome-card" id="welcomeCard">
-          <div class="welcome-icon">🤖</div>
-          <h1>Welcome to Jarvis</h1>
-          <p>Your fully local, private AI assistant running on ASUS ROG Flow Z13.</p>
-          <div class="example-prompts">
-            <button class="prompt-chip" data-prompt="Explain AMD Radeon 8060S UMA memory architecture.">
-              Explain AMD Radeon 8060S UMA memory architecture
-            </button>
-            <button class="prompt-chip" data-prompt="Research the latest benchmarks on local LLM inference engines.">
-              Research the latest local LLM benchmarks
-            </button>
-            <button class="prompt-chip" data-prompt="How does Jarvis enforce the Action Gateway 3-tier security model?">
-              Explain Action Gateway security tiers
-            </button>
+        <div class="sidebar-section">
+          <label for="modelSelect" class="section-label">Model</label>
+          <select id="modelSelect" class="model-select" data-testid="model-select">
+            <option value="" disabled selected>Loading models...</option>
+          </select>
+          <p class="model-note" id="modelNote" role="status"></p>
+        </div>
+
+        <div class="sidebar-section toggle-section">
+          <label class="toggle-container">
+            <input type="checkbox" id="researchToggle" data-testid="research-toggle" checked>
+            <span class="toggle-slider"></span>
+            <span class="toggle-label">Web Research (SearXNG)</span>
+          </label>
+        </div>
+
+        <div class="session-history-title">Recent Chats</div>
+        <div class="session-list" id="sessionList" data-testid="session-list"></div>
+      </aside>
+
+      <main class="chat-workspace" id="chatWorkspace">
+        <header class="chat-header">
+          <button type="button" class="sidebar-toggle" id="sidebarToggle" aria-controls="sidebar" aria-expanded="false" data-testid="sidebar-toggle">Chats</button>
+          <div class="header-info">
+            <h2 id="currentChatTitle">New Conversation</h2>
+            <span class="current-model-tag" id="currentModelTag" data-testid="current-model"></span>
+          </div>
+        </header>
+
+        <div class="messages-container" id="messagesContainer" data-testid="messages" role="region" aria-label="Conversation">
+          <div class="welcome-card" id="welcomeCard">
+            <div class="welcome-icon" aria-hidden="true">🤖</div>
+            <h1>Welcome to Jarvis</h1>
+            <p>Your fully local, private AI assistant running on ASUS ROG Flow Z13.</p>
+            <div class="example-prompts">
+              <button class="prompt-chip" data-testid="prompt-chip" data-prompt="Explain AMD Radeon 8060S UMA memory architecture.">
+                Explain AMD Radeon 8060S UMA memory architecture
+              </button>
+              <button class="prompt-chip" data-testid="prompt-chip" data-prompt="Research the latest benchmarks on local LLM inference engines.">
+                Research the latest local LLM benchmarks
+              </button>
+              <button class="prompt-chip" data-testid="prompt-chip" data-prompt="How does Jarvis enforce the Action Gateway 3-tier security model?">
+                Explain Action Gateway security tiers
+              </button>
+            </div>
           </div>
         </div>
-      </div>
 
-      <div class="input-area-container">
-        <form class="input-form" id="chatForm">
-          <textarea
-            id="promptInput"
-            class="prompt-textarea"
-            placeholder="Ask Jarvis anything (Shift+Enter for newline)..."
-            rows="1"
-            required
-          ></textarea>
-          <button type="submit" class="send-btn" id="sendBtn">
-            <span>Send</span>
-          </button>
-          <button type="button" class="stop-btn" id="stopBtn" hidden>
-            <span>Stop</span>
-          </button>
-        </form>
-        <div class="input-footer">
-          <span>Private & Local • Local inference via Ollama • Zero Cloud Telemetry</span>
+        <div class="sr-only" id="chatAnnouncer" role="status" aria-live="polite" aria-atomic="true" data-testid="chat-announcer"></div>
+
+        <div class="input-area-container" id="dropZone">
+          <div class="attachment-tray" id="attachmentTray" data-testid="attachment-tray" hidden></div>
+          <form class="input-form" id="chatForm" data-testid="chat-form">
+            <button type="button" class="attach-btn" id="attachBtn" aria-label="Attach an image" title="Attach an image (or paste or drop one)" data-testid="attach-image">+</button>
+            <input type="file" id="imageInput" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden data-testid="image-input">
+            <textarea
+              id="promptInput"
+              class="prompt-textarea"
+              data-testid="prompt-input"
+              aria-label="Message"
+              placeholder="Ask Jarvis anything..." title="Enter sends, Shift+Enter adds a new line"
+              rows="1"
+              required
+            ></textarea>
+            <button type="submit" class="send-btn" id="sendBtn" data-testid="send">
+              <span>Send</span>
+            </button>
+            <button type="button" class="stop-btn" id="stopBtn" data-testid="stop" hidden>
+              <span>Stop</span>
+            </button>
+          </form>
+          <div class="input-footer">
+            <span>Private &amp; Local • Local inference via Ollama • Zero Cloud Telemetry</span>
+          </div>
         </div>
-      </div>
-    </main>
+      </main>
+    </div>
+
+    <!-- Dashboard -->
+    <div class="dashboard" id="panelDashboard" role="tabpanel" aria-labelledby="tabDashboard" data-testid="panel-dashboard" hidden>
+      <div class="dashboard-grid" id="dashboardGrid"></div>
+    </div>
   </div>
 
   <script type="module" src="/app.js"></script>

@@ -132,4 +132,52 @@ describe('MultiModelEnsemble', () => {
     assert.match(formatted, /skipped: _not installed_/);
     assert.match(formatted, /failed: _boom_/);
   });
+
+  test('a stop between candidates ends the run with the answers already in, and marks it aborted', async () => {
+    const controller = new AbortController();
+    const { ensemble, order } = make({ 'qwen3:8b': 'the answer is 42', 'qwen3:14b': 'the answer is 42', 'qwen3.8:27b': 'the answer is 42' });
+    // The first model finishes, then the owner presses Stop: the other two must not start.
+    const original = ensemble.generateSimultaneous.bind(ensemble);
+    const run = original('what is the answer', { signal: controller.signal, models: ['qwen3:8b', 'qwen3:14b', 'qwen3.8:27b'] });
+    const watcher = (async () => {
+      while (order.length === 0) await new Promise((r) => setImmediate(r));
+      controller.abort();
+    })();
+    const res = await run;
+    await watcher;
+    assert.equal(res.aborted, true);
+    assert.deepEqual(order, ['qwen3:8b']);
+    assert.deepEqual(res.modelsUsed, ['qwen3:8b']);
+  });
+
+  test('an aborted signal runs no model at all and reports it instead of an empty success', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const { ensemble, order } = make({ 'qwen3:8b': 'x y z' });
+    await assert.rejects(ensemble.generateSimultaneous('q', { signal: controller.signal, models: ['qwen3:8b'] }), /stopped before any model answered/);
+    assert.deepEqual(order, []);
+  });
+
+  test('the signal reaches the model call and the lease queue', async () => {
+    const controller = new AbortController();
+    const seen: Array<AbortSignal | undefined> = [];
+    const checker = new CapabilityChecker({ minHeadroomBytes: 1, env: {} });
+    checker.getFreeMemory = () => 200 * GIB;
+    checker.getTotalMemory = () => 256 * GIB;
+    const ensemble = new MultiModelEnsemble({
+      governor: new MemoryGovernor({ capabilityChecker: checker, pacingDelayMs: 0 }),
+      getInstalled: async () => INSTALLED,
+      getVramFreeBytes: async () => 45 * GIB,
+      providerFactory: (tag) => {
+        const p = new MockLLMProvider({ model: tag });
+        p.generate = async (_prompt, options) => {
+          seen.push(options?.signal);
+          return 'same words here';
+        };
+        return p;
+      },
+    });
+    await ensemble.generateSimultaneous('q', { signal: controller.signal, models: ['qwen3:8b'] });
+    assert.equal(seen[0], controller.signal);
+  });
 });

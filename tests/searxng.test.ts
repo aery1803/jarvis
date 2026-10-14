@@ -6,6 +6,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { SearXNGClient } from '../src/services/searxng.js';
+import { config } from '../src/config.js';
 
 describe('SearXNGClient', () => {
   test('should parse raw SearXNG JSON response into normalized SearchResult list', () => {
@@ -122,17 +123,20 @@ describe('SearXNGClient', () => {
     await assert.rejects(new SearXNGClient({ enableFallback: false, fetchImpl: impl }).search('x'), /ECONNREFUSED/);
   });
 
-  test('JARVIS_SEARCH_LIVE_FALLBACK=0 disables the live fallback by default', async () => {
-    const saved = process.env.JARVIS_SEARCH_LIVE_FALLBACK;
-    process.env.JARVIS_SEARCH_LIVE_FALLBACK = '0';
+  test('a bare client takes its live-fallback default from config.searchLiveFallback (off unless the owner enabled it)', async () => {
+    const saved = config.searchLiveFallback;
     try {
-      const { impl, calls } = fakeFetch({ ddg: () => new Response(ddgHtml, { status: 200 }) });
-      const outcome = await new SearXNGClient({ fetchImpl: impl }).searchDetailed('x');
+      config.searchLiveFallback = false;
+      const off = fakeFetch({ ddg: () => new Response(ddgHtml, { status: 200 }) });
+      const outcome = await new SearXNGClient({ fetchImpl: off.impl }).searchDetailed('x');
       assert.equal(outcome.source, 'none');
-      assert.ok(calls.every((c) => !c.url.includes('duckduckgo')));
+      assert.ok(off.calls.every((c) => !c.url.includes('duckduckgo')));
+
+      config.searchLiveFallback = true;
+      const on = fakeFetch({ ddg: () => new Response(ddgHtml, { status: 200 }) });
+      assert.equal((await new SearXNGClient({ fetchImpl: on.impl }).searchDetailed('x')).source, 'duckduckgo-live');
     } finally {
-      if (saved === undefined) delete process.env.JARVIS_SEARCH_LIVE_FALLBACK;
-      else process.env.JARVIS_SEARCH_LIVE_FALLBACK = saved;
+      config.searchLiveFallback = saved;
     }
   });
 });

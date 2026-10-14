@@ -48,4 +48,6 @@ export interface VisionOptions {
   model?: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  /** Aborts the Ollama requests (the kill switch and a closed request use it). */
+  signal?: AbortSignal;
 }

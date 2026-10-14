@@ -1,66 +1,44 @@
-import path from 'node:path';
-import fs from 'node:fs';
-import { TelegramBotClient } from '../telegram/bot.js';
-import { getTelegramToken, getTelegramOwnerId } from '../security/credentials.js';
-import { DocumentStore } from '../storage/collection.js';
-import { MemoryManager } from '../memory/manager.js';
-import { SessionManager } from '../sessions/manager.js';
-import { KillSwitch } from '../security/kill-switch.js';
-import { OllamaProvider } from '../services/provider.js';
 import { config } from '../config.js';
+import { createLauncherRuntime, errorMessage, startTelegram } from './bootstrap.js';
 
 async function main(): Promise<void> {
-  console.log('[Jarvis Telegram Service] Bootstrapping Phase 2 Bot...');
+  console.log('[Jarvis Telegram Service] Bootstrapping...');
 
-  const token = getTelegramToken('jarvis-telegram-dev');
-  if (!token) {
-    console.error('[Jarvis Telegram Service] FATAL: Missing Telegram dev token in Windows Credential Manager (jarvis-telegram-dev).');
+  const launcher = await createLauncherRuntime({ reconcileInterruptedTasks: false });
+  const { rt, ownerId } = launcher;
+  console.log(`[Jarvis Telegram Service] Runtime ready, default model ${config.defaultModel}, Ollama: ${rt.getStatus().inventory.status}`);
+
+  const telegram = await startTelegram(rt, ownerId);
+  if (!telegram) {
+    console.error('[Jarvis Telegram Service] FATAL: no Telegram token (TELEGRAM_BOT_TOKEN, TELEGRAM_DEV_TOKEN or Credential Manager jarvis-telegram-dev).');
+    await launcher.close();
     process.exit(1);
   }
-
-  const ownerId = getTelegramOwnerId();
   if (ownerId) {
-    console.log(`[Jarvis Telegram Service] Strict allow-list armed for Owner Telegram ID: ${ownerId}`);
+    console.log(`[Jarvis Telegram Service] Allow-list armed for owner Telegram ID ${ownerId}.`);
   } else {
-    console.log('[Jarvis Telegram Service] WARNING: TELEGRAM_OWNER_ID not configured in settings.env; running in open dev mode.');
+    console.log('[Jarvis Telegram Service] WARNING: TELEGRAM_OWNER_ID is not configured. The bot refuses everyone except /id (unless JARVIS_TELEGRAM_OPEN=1 is set for development).');
   }
+  console.log(`[Jarvis Telegram Service] Online as ${telegram.summary}. Long polling started.`);
 
-  const dataDir = path.resolve(process.cwd(), 'data');
-  if (!fs.existsSync(dataDir)) {
-    fs.mkdirSync(dataDir, { recursive: true });
-  }
-
-  const dbPath = path.join(dataDir, 'jarvis.db');
-  const store = new DocumentStore(dbPath);
-  const sessionManager = new SessionManager(store);
-  const memoryManager = new MemoryManager(store);
-  const killSwitch = new KillSwitch(store, sessionManager);
-  const llmProvider = new OllamaProvider({ baseUrl: config.ollamaBaseUrl, model: config.defaultModel });
-
-  const bot = new TelegramBotClient({
-    token,
-    ownerId,
-    sessionManager,
-    memoryManager,
-    killSwitch,
-    llmProvider,
-  });
-
-  const shutdown = (): void => {
+  let stopping = false;
+  const shutdown = async (): Promise<void> => {
+    if (stopping) return;
+    stopping = true;
     console.log('\n[Jarvis Telegram Service] Stopping long polling and exiting cleanly...');
-    bot.stopPolling();
-    store.close();
+    try {
+      await telegram.bot.stop();
+    } catch (err: unknown) {
+      console.error(`[Jarvis Telegram Service] Stopping the bot failed: ${errorMessage(err)}`);
+    }
+    await launcher.close();
     process.exit(0);
   };
-
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
-
-  console.log('[Jarvis Telegram Service] Bot connected. Starting outbound long polling...');
-  await bot.startPolling(1000);
+  process.on('SIGINT', () => void shutdown());
+  process.on('SIGTERM', () => void shutdown());
 }
 
-main().catch((err) => {
-  console.error('[Jarvis Telegram Service] Uncaught error:', err);
+main().catch((err: unknown) => {
+  console.error('[Jarvis Telegram Service] Fatal error:', errorMessage(err));
   process.exit(1);
 });

@@ -3,7 +3,7 @@
  * Authority: Section 8 (Memory Tiers), FEAT-004
  *
  * Assembles the memory context passed to `CognitionEngine.formatPrompt` as `memoryContext`:
- * T1 owner profile, T2 summaries of other sessions, T3 relevant past tasks, T4 relevant knowledge, and
+ * T1 owner profile, T2 summaries of other sessions, T3 relevant past tasks of this session, T4 relevant knowledge, and
  * T0 the current conversation's recent turns, all within a token budget. Reads never throw; a failing store
  * yields less context rather than a broken reply.
  */
@@ -14,6 +14,7 @@ import type { EpisodicMemory, MemoryTier, SessionSummary } from './types.js';
 import { detectSensitive, redactSensitive } from './sensitive.js';
 import { OllamaProvider, type LLMProvider } from '../services/provider.js';
 import { logger } from '../utils/logger.js';
+import { stripThinking } from '../chat/thinking.js';
 
 /** Hard ceiling for the whole assembled prompt (system prompt + context + research + request). */
 export const PROMPT_TOKEN_CAP = 12_000;
@@ -43,6 +44,11 @@ export interface ConversationContextOptions {
   turns?: ConversationTurn[];
   maxTokens?: number;
   maxTurnChars?: number;
+  /**
+   * The ids of the user's sessions that still exist. A summary whose session is gone is never injected (a row an
+   * older, non-atomic delete left behind must not keep reaching other conversations). Omitted: no filtering.
+   */
+  liveSessionIds?: ReadonlySet<string>;
 }
 
 /** One tier's block of the assembled context; `lines` lets `fitContextToBudget` shrink it line by line. */
@@ -67,6 +73,10 @@ export interface SummarizeSessionArgs {
   userId: string;
   sessionId: string;
   turns: ConversationTurn[];
+  /** Aborts the summary request (kill switch, shutdown). */
+  signal?: AbortSignal;
+  /** Longest the summary request may take. */
+  timeoutMs?: number;
 }
 
 export function estimateTokens(text: string): number {
@@ -256,16 +266,19 @@ export async function buildConversationContext(options: ConversationContextOptio
     // T2: only other sessions' summaries; this session is represented by its own turns (T0).
     const summaries = await safely('session summaries', () => memory.getSessionSummaries(userId, undefined, 50));
     if (summaries) {
-      const others = latestSummaryPerSession(summaries.filter((s) => s.userId === userId && s.sessionId !== sessionId)).slice(0, 3);
+      const others = latestSummaryPerSession(
+        summaries.filter((s) => s.userId === userId && s.sessionId !== sessionId && (!options.liveSessionIds || options.liveSessionIds.has(s.sessionId)))
+      ).slice(0, 3);
       const header = '### Summaries Of Earlier Conversations';
       const lines = others.map((s) => `- ${clampText(oneLine(s.summary), 600)}`);
       addSection('T2', fitLines(header, lines, Math.floor(maxChars * 0.2)), { header, lines });
     }
 
-    // T3: what happened on similar past tasks, and whether the owner was happy with it.
-    const episodes = memory.queryEpisodes ? await safely('episodes', () => memory.queryEpisodes!({ userId }, 50)) : null;
+    // T3: this session's own earlier tasks only. Sessions stay isolated: the profile (T1) and other sessions'
+    // summaries (T2) are the sanctioned cross-session channels, so another session's goals never appear here.
+    const episodes = memory.queryEpisodes ? await safely('episodes', () => memory.queryEpisodes!({ userId, sessionId }, 50)) : null;
     if (episodes) {
-      const relevant = rankEpisodes(episodes.filter((e) => e.userId === userId), prompt);
+      const relevant = rankEpisodes(episodes.filter((e) => e.userId === userId && e.sessionId === sessionId), prompt);
       const header = '### Relevant Past Tasks (reference only)';
       const lines = relevant.map((episode) => {
         const verdict = episode.feedback === 'positive' ? ' [owner liked this]' : episode.feedback === 'negative' ? ' [owner marked this unhelpful]' : '';
@@ -326,6 +339,8 @@ export async function summarizeAndStoreSession(args: SummarizeSessionArgs): Prom
 
   // Secrets are redacted before the summarizer sees them, so neither its prompt nor its output can carry one.
   const transcript = turns
+    // A reply saved before reasoning was stripped may still carry `<think>` text; it is not part of the conversation.
+    .map((t) => ({ ...t, content: stripThinking(t.content) }))
     .filter((t) => t.role !== 'system' && t.content.trim())
     .slice(-12)
     .map((t) => formatTurn({ ...t, content: redactSensitive(t.content) }, 800).replace(/<\/?conversation>/gi, ''))
@@ -340,7 +355,9 @@ export async function summarizeAndStoreSession(args: SummarizeSessionArgs): Prom
     `${previousText}<conversation>\n${transcript}\n</conversation>`;
 
   try {
-    const summary = redactSensitive((await summarizer.generate(summaryPrompt, { maxTokens: 200, temperature: 0.2 })).trim());
+    const summary = redactSensitive(
+      stripThinking(await summarizer.generate(summaryPrompt, { maxTokens: 200, temperature: 0.2, signal: args.signal, timeoutMs: args.timeoutMs })).trim()
+    );
     if (!summary) return null;
     await memory.saveSessionSummary(userId, sessionId, summary, turns.length);
     logger.debug('[ContextBuilder] Stored session summary', { sessionId, turnCount: turns.length, model: summarizer.getModel() });

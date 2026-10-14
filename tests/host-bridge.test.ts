@@ -234,3 +234,36 @@ describe('HostBridge screen state', () => {
     assert.match(throwing.unavailableReason ?? '', /spawn denied/);
   });
 });
+
+describe('HostBridge with an Action Gateway', () => {
+  // A gateway with no broker denies any Tier 2 action that has to ask, so success proves nothing was asked twice.
+  async function build(): Promise<{ bridge: HostBridge; registry: import('../src/devagent/action-registry.js').OwnActionRegistry; calls: Call[] }> {
+    const { ActionGateway } = await import('../src/devagent/action-gateway.js');
+    const { OwnActionRegistry } = await import('../src/devagent/action-registry.js');
+    const registry = new OwnActionRegistry(':memory:');
+    const gateway = new ActionGateway(registry, { minFreeMemoryBytes: 1, getFreeMemory: () => 16e9 });
+    const { runner, calls } = recordingRunner();
+    return { bridge: new HostBridge(gateway, { workspaceRoot: os.tmpdir(), platform: 'linux', runProcess: runner }), registry, calls };
+  }
+
+  test('an owner-approved Tier 2 command is not asked again and is audited once', async () => {
+    const { bridge, registry, calls } = await build();
+    const result = await bridge.executeCommand({ command: 'node', args: ['script.js'] }, true);
+    assert.equal(result.exitCode, 0);
+    assert.equal(calls.length, 1);
+    assert.equal(registry.getAllActions().length, 1);
+  });
+
+  test('a caller that already audited the approval skips the gateway entirely', async () => {
+    const { bridge, registry, calls } = await build();
+    await bridge.executeCommand({ command: 'node', args: ['script.js'] }, true, { approvalAuditedByCaller: true });
+    assert.equal(calls.length, 1);
+    assert.equal(registry.getAllActions().length, 0);
+  });
+
+  test('an unapproved Tier 2 command is still blocked', async () => {
+    const { bridge, calls } = await build();
+    await assert.rejects(bridge.executeCommand({ command: 'node', args: ['script.js'] }, false));
+    assert.equal(calls.length, 0);
+  });
+});
