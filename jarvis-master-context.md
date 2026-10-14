@@ -1291,12 +1291,12 @@ Decision: **Claude writes everything the blueprint needs; the owner's local AI b
   - Guarded by Jarvis Action Gateway instead of GitHub web UI branch protection ruleset.
 
 ##### P10. The board, its fields, and the nine labels
-- [x] **Nine repository labels: CREATED & VERIFIED** on `aery1803/jarvis`:
-  `concept-complete`, `ai-working`, `needs-owner`, `blocked`, `bug`, `release-approved`, `ai-proposed`, `ai-authored`, `owner-approved`.
-- [ ] Create the GitHub Project board at `https://github.com/users/aery1803/projects` (Board layout, linked to `aery1803/jarvis`).
-- [ ] Configure the **Status** column with **exactly five options in order:** `Concept`, `Ready for Dev`, `Code Review`, `QA`, `Done`.
-- [ ] Add the single-select field **Type** with options: `Feature`, `Story`, `Bug`.
-- **Done when:** The board columns and all 9 labels match.
+- [x] **Status: VERIFIED & COMPLETED**
+  - **Project Board:** `Jarvis` (URL: `https://github.com/users/aery1803/projects/2`, Project ID: `PVT_kwHOBShJEs4Bm-d2`).
+  - **Linked Repository:** `aery1803/jarvis`.
+  - **Status Columns (exact 5 in order):** `Concept`, `Ready for Dev`, `Code Review`, `QA`, `Done`.
+  - **Single-select Type Field:** `Ticket Type` with options: `Feature`, `Story`, `Bug`.
+  - **Nine Repository Labels:** Created and verified on `aery1803/jarvis` (`concept-complete`, `ai-working`, `needs-owner`, `blocked`, `bug`, `release-approved`, `ai-proposed`, `ai-authored`, `owner-approved`).
 
 ##### P11. The limited token (Windows Credential Manager)
 - [ ] Generate a Personal Access Token on GitHub (with `repo` and `project` access, $\le 90$ day expiry).
@@ -1370,7 +1370,7 @@ P7 Ollama runs: Yes (v0.40.4) | llama.cpp Vulkan runs: Yes (b11272, 54,305 MiB f
 P8 organization and repository names: aery1803/jarvis (Private)
 P8 branches main and master exist: Yes (both active and synchronized on origin)
 P9 branch protection: Skipped (free plan; guarded by Jarvis Action Gateway)
-P10 board has the five columns, Type field, nine labels: In progress
+P10 board has the five columns, Type field, nine labels: Yes (Board #2 created, linked to repo, 5 columns & 9 labels active)
 P11 token created, stored in Credential Manager: In progress
 P12 two bots created, numeric Telegram ID: Pending
 P13 test Gmail address: Pending
