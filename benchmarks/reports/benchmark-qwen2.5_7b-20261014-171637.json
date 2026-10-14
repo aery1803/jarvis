@@ -1,0 +1,18 @@
+[
+    {
+        "PassName":  "Warmup \u0026 Initial Latency",
+        "PromptTokens":  38,
+        "PromptTPS":  402.4,
+        "GenerationTokens":  64,
+        "GenerationTPS":  43.8,
+        "TotalDurationSec":  4.85
+    },
+    {
+        "PassName":  "Sustained Code Generation",
+        "PromptTokens":  122,
+        "PromptTPS":  1088.8,
+        "GenerationTokens":  350,
+        "GenerationTPS":  41.2,
+        "TotalDurationSec":  8.61
+    }
+]

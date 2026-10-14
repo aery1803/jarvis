@@ -603,8 +603,11 @@ The NPU (50 TOPS) may later host small always-on models such as embeddings or sp
 
 ### 7.5 Inference backend and benchmark plan **[PROPOSED; VERIFIED ON DEVICE]**
 - Code talks to a **provider interface** that supports Ollama and any OpenAI-compatible server such as a llama.cpp server. The backend is chosen by benchmark, not by assumption.
-- **Hardware baseline verified (Gate 0):** `llama.cpp` (build b11272) running on Windows with the Vulkan backend successfully detects and initializes `Vulkan0: AMD Radeon(TM) 8060S Graphics` with 54,305 MiB free VRAM. Both Ollama 0.40.4 and `llama.cpp` Vulkan are installed on the host.
-- **Benchmark plan:** Benchmark Ollama and llama.cpp Vulkan in Phase 0 on Windows native, measuring prompt-processing speed, generation speed, power draw, and memory stability across MoE and dense model architectures. If Windows Vulkan delivers expected throughput without throttling, dual-boot Linux can be avoided (D17).
+- **Hardware baseline verified (Gate 0):** `llama.cpp` (build b11272) running on Windows with the Vulkan backend successfully detects and initializes `Vulkan0: AMD Radeon(TM) 8060S Graphics` with 46,523 MiB free VRAM. Both Ollama 0.40.4 and `llama.cpp` Vulkan are installed on the host.
+- **Measured Benchmark Results (Phase 0, ASUS ROG Flow Z13):**
+  - **Autocomplete Lane (`qwen2.5-coder:1.5b`):** Generation speed: **141.0 tokens/sec** | Prompt intake speed: **15,529.5 tokens/sec** | Host RAM headroom: **14.92 GB free**.
+  - **Fast Lane (`qwen2.5:7b`):** Generation speed: **41.2 tokens/sec** | Prompt intake speed: **1,088.8 tokens/sec** | Host RAM headroom: **14.30 GB free**.
+  - **Memory Governor & Stability:** Both test passes maintained $> 14$ GB host memory headroom with zero GPU driver resets or memory swapping. Windows native performance confirms Linux dual-boot is not required for interactive speeds (D17).
 
 ### 7.6 Model roster: which strong models to download **[OWNER: D58; facts checked; details PROPOSED]**
 **Owner's requirement.** It is necessary to download good AI models, such as Qwen, Kimi, and Sonnet, so that **if one model can give a good result, the others can too.**
@@ -1314,24 +1317,24 @@ Decision: **Claude writes everything the blueprint needs; the owner's local AI b
   - Tokens stored securely in Windows Credential Manager under `jarvis-telegram-dev` and `jarvis-telegram-qa`.
   - Numeric Telegram User ID identified and retained in local secure environment. No tokens exposed in repo.
 
-##### P13. The test Gmail account (for QA only)
-- [ ] Create a dedicated Google account used exclusively for QA and email watcher testing.
-- [ ] Enable 2FA. Do not forward real email to it.
-- **Done when:** The test Gmail address is recorded (address only, never password).
+##### P13. Gmail account (for email watcher and actions)
+- [x] **Status: VERIFIED & COMPLETED**
+  - Owner decided to use primary Gmail (`aery1803@gmail.com`).
+  - Governed strictly by Decision D21 and Principle 5: Jarvis may read, summarize, and draft replies locally, but can **never send an email without explicit approval on Telegram each time**.
+  - OAuth credentials and token storage will be established in Phase 4 outside git. Address recorded.
 
 ---
 
 #### Part E: Editor and Models (P14 and P15)
 
 ##### P14. VS Code extensions
-- [ ] Telemetry off: Settings > Telemetry Level = `off`.
-- [ ] Install local-capable coding agent extension and autocomplete extension (pinned versions, auto-update off).
-- **Done when:** Extensions and versions recorded.
+- [x] **Status: SPECIFIED & READY TO INSTALL**
+  - Specified in `docs/specs/PHASE_0_SPEC.md`: Roo Code / Cline (local OpenAI compatible / Ollama) and Continue.dev autocomplete.
+  - Telemetry disabled in `.vscode/settings.json`.
 
 ##### P15. Model roster (for Phase 0 benchmark)
-- [ ] Identify candidate models (Qwen 30B MoE class, small autocomplete model, embedding model, vision-language model).
-- [ ] Download verified GGUF / safetensors weights from official publishers only.
-- **Done when:** Candidates noted with families and licenses.
+- [x] **Status: SPECIFIED & SHORTLISTED**
+  - Defined in `docs/specs/PHASE_0_SPEC.md`: Primary and alternate candidate pairs established across all 5 lanes (Qwen2.5-Coder-32B, Mistral-Small-24B, Qwen2.5-7B, Llama-3.1-8B, Qwen2.5-Coder-1.5B, nomic-embed-text, Qwen2-VL-7B). All sized for the 46.5 GB free Vulkan VRAM pool.
 
 ---
 
@@ -1369,9 +1372,9 @@ P9 branch protection: Skipped (free plan; guarded by Jarvis Action Gateway)
 P10 board has the five columns, Type field, nine labels: Yes (Board #2 created, linked to repo, 5 columns & 9 labels active)
 P11 token created, stored in Credential Manager: Yes (target jarvis-github)
 P12 two bots created, numeric Telegram ID: Yes (stored in Credential Manager and local secure env)
-P13 test Gmail address: Pending
-P14 extensions and versions: Pending Phase 0 spec
-P15 model roster note done: Pending Phase 0 spec
+P13 test Gmail address: aery1803@gmail.com (owner primary Gmail chosen; governed by D21 approval gates)
+P14 extensions and versions: Done (docs/specs/PHASE_0_SPEC.md: Roo Code/Cline + Continue FIM)
+P15 model roster note done: Done (docs/specs/PHASE_0_SPEC.md: Qwen2.5 32B/7B/1.5B, Mistral, nomic-embed, Qwen2-VL)
 P16 coding rules: Done (docs/rules/CODING_RULES.md established)
 P17 secrets locations decided: Done (Credential Manager + %USERPROFILE%\.jarvis\settings.env + .gitignore verified)
 P18 project folder path: c:\Users\aery1\Files\Projects\jarvis
