@@ -65,6 +65,7 @@ To stop everything, simply press **Ctrl + C** in your terminal.
    - `/status` — Shows laptop battery, memory, and temperature.
    - `/models` — Lists all the smart AI models installed.
    - `/model qwen2.5-coder:7b` — Switches to the code-writing model!
+   - `/ensemble [on|off|<query>]` — Runs multiple models simultaneously, corroborating candidate answers!
    - `/benchmark [model]` — Tests reasoning, coding, and speed, giving a real scorecard!
    - `/research <topic>` — Conducts a deep internet investigation and gives you a summary with sources.
    - `/kill` — Emergency stop button that halts all background tasks.

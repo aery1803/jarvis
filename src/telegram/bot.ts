@@ -15,6 +15,7 @@ import { ConsensusEngine } from '../services/consensus.js';
 import { CognitionEngine } from '../agents/cognition.js';
 import { ModelBenchmarkSuite } from '../eval/benchmark.js';
 import { ModelProvisioner } from '../orchestration/provisioner.js';
+import { MultiModelEnsemble } from '../orchestration/ensemble.js';
 import { config } from '../config.js';
 
 export interface TelegramBotOptions {
@@ -37,6 +38,8 @@ export class TelegramBotClient {
   private searchClient: SearXNGClient;
   private distiller: ContentDistiller;
   private consensus: ConsensusEngine;
+  private ensemble: MultiModelEnsemble;
+  private ensembleMode = false;
 
   constructor(private options: TelegramBotOptions) {
     this.token = options.token;
@@ -45,10 +48,28 @@ export class TelegramBotClient {
     this.searchClient = new SearXNGClient({ enableFallback: true });
     this.distiller = new ContentDistiller();
     this.consensus = new ConsensusEngine();
+    this.ensemble = new MultiModelEnsemble();
   }
 
   getOwnerId(): string {
     return this.ownerId;
+  }
+
+  /**
+   * Runs an asynchronous operation while pulsing continuous 'typing' actions to Telegram.
+   * Prevents the typing indicator from expiring during long searches, downloads, or inference.
+   */
+  async withTypingIndicator<T>(chatId: number | string, action: () => Promise<T>): Promise<T> {
+    await this.sendAction(chatId, 'typing').catch(() => {});
+    const interval = setInterval(() => {
+      this.sendAction(chatId, 'typing').catch(() => {});
+    }, 3500);
+
+    try {
+      return await action();
+    } finally {
+      clearInterval(interval);
+    }
   }
 
   async apiCall<T>(method: string, body?: Record<string, unknown>): Promise<T> {
@@ -283,6 +304,7 @@ export class TelegramBotClient {
             `- \`/id\` - Show your numeric Telegram User ID\n` +
             `- \`/models\` - List available local models\n` +
             `- \`/model <name>\` - Switch active model (e.g. qwen2.5-coder:7b)\n` +
+            `- \`/ensemble [on|off|<query>]\` - Query multiple models simultaneously\n` +
             `- \`/benchmark [model]\` - Run intelligence benchmark & report score\n` +
             `- \`/research <query>\` - Run multi-source research on any topic\n` +
             `- \`/new <name>\` - Start a new isolated workspace session\n` +
@@ -322,25 +344,57 @@ export class TelegramBotClient {
         break;
       }
 
+      case '/ensemble': {
+        const sub = args[0]?.toLowerCase().trim();
+        if (sub === 'on') {
+          this.ensembleMode = true;
+          await this.sendMessage(chatId, `✅ *Ensemble Mode Enabled:* Jarvis will now query multiple local models simultaneously for every prompt.`);
+          break;
+        }
+        if (sub === 'off') {
+          this.ensembleMode = false;
+          await this.sendMessage(chatId, `ℹ️ *Ensemble Mode Disabled:* Jarvis will route prompts to single optimal specialized models.`);
+          break;
+        }
+        const query = args.join(' ').trim();
+        if (!query) {
+          const status = this.ensembleMode ? 'ENABLED (Always Active)' : 'DISABLED (Single Model)';
+          await this.sendMessage(chatId, `*Multi-Model Ensemble Status:* ${status}\n\n*Usage:*\n- \`/ensemble on\` - Enable simultaneous multi-model execution\n- \`/ensemble off\` - Disable ensemble mode\n- \`/ensemble <query>\` - Query multiple models simultaneously right now`);
+          break;
+        }
+
+        await this.withTypingIndicator(chatId, async () => {
+          try {
+            const result = await this.ensemble.generateSimultaneous(query);
+            const formatted = MultiModelEnsemble.formatEnsembleResponse(result, true);
+            await this.sendMessage(chatId, formatted);
+          } catch (err: any) {
+            await this.sendMessage(chatId, `Ensemble execution error: ${err.message}`);
+          }
+        });
+        break;
+      }
+
       case '/benchmark': {
         const targetModel = args[0]?.trim() || this.options.llmProvider?.getModel?.() || 'qwen2.5:7b';
         await this.sendMessage(
           chatId,
           `⏳ *Starting Intelligence Benchmark for:* \`${targetModel}\`...\nEvaluating Reasoning, Coding, Tool Calling, and Retrieval. Please wait 10-20 seconds.`
         );
-        await this.sendAction(chatId, 'typing');
-        try {
-          const suite = new ModelBenchmarkSuite();
-          let benchProvider = this.options.llmProvider;
-          if (!benchProvider || benchProvider.getModel() !== targetModel) {
-            benchProvider = new OllamaProvider({ baseUrl: config.ollamaBaseUrl, model: targetModel });
+        await this.withTypingIndicator(chatId, async () => {
+          try {
+            const suite = new ModelBenchmarkSuite();
+            let benchProvider = this.options.llmProvider;
+            if (!benchProvider || benchProvider.getModel() !== targetModel) {
+              benchProvider = new OllamaProvider({ baseUrl: config.ollamaBaseUrl, model: targetModel });
+            }
+            const card = await suite.runBenchmark(benchProvider);
+            const reportMd = ModelBenchmarkSuite.formatMarkdownReport(card);
+            await this.sendMessage(chatId, reportMd);
+          } catch (err: any) {
+            await this.sendMessage(chatId, `Benchmark failed: ${err.message}`);
           }
-          const card = await suite.runBenchmark(benchProvider);
-          const reportMd = ModelBenchmarkSuite.formatMarkdownReport(card);
-          await this.sendMessage(chatId, reportMd);
-        } catch (err: any) {
-          await this.sendMessage(chatId, `Benchmark failed: ${err.message}`);
-        }
+        });
         break;
       }
 
@@ -350,27 +404,28 @@ export class TelegramBotClient {
           await this.sendMessage(chatId, `Please provide a query: \`/research <topic>\``);
           break;
         }
-        await this.sendAction(chatId, 'typing');
-        try {
-          const results = await this.searchClient.search(query, { maxResults: 3 });
-          const extracted = results.map((r) => this.distiller.extractText(r.snippet, r.url));
-          const report = this.consensus.buildReport([
-            {
-              claim: query,
-              sources: extracted.map((e) => ({ source: e.url, excerpt: e.content })),
-            },
-          ]);
-          const sources = extracted.map((e) => `- ${e.url}`).join('\n');
-          await this.sendMessage(
-            chatId,
-            `*Deep Research: ${query}*\n\n` +
-              `*Consensus Confidence:* ${(report.overallScore * 100).toFixed(0)}%\n\n` +
-              `*Synthesized Findings:*\n${extracted.map((e) => e.content).join('\n\n')}\n\n` +
-              `📚 *Sources:*\n${sources}`
-          );
-        } catch (err: any) {
-          await this.sendMessage(chatId, `Research error: ${err.message}`);
-        }
+        await this.withTypingIndicator(chatId, async () => {
+          try {
+            const results = await this.searchClient.search(query, { maxResults: 3 });
+            const extracted = results.map((r) => this.distiller.extractText(r.snippet, r.url));
+            const report = this.consensus.buildReport([
+              {
+                claim: query,
+                sources: extracted.map((e) => ({ source: e.url, excerpt: e.content })),
+              },
+            ]);
+            const sources = extracted.map((e) => `- ${e.url}`).join('\n');
+            await this.sendMessage(
+              chatId,
+              `*Deep Research: ${query}*\n\n` +
+                `*Consensus Confidence:* ${(report.overallScore * 100).toFixed(0)}%\n\n` +
+                `*Synthesized Findings:*\n${extracted.map((e) => e.content).join('\n\n')}\n\n` +
+                `📚 *Sources:*\n${sources}`
+            );
+          } catch (err: any) {
+            await this.sendMessage(chatId, `Research error: ${err.message}`);
+          }
+        });
         break;
       }
 
@@ -523,86 +578,103 @@ export class TelegramBotClient {
       taskTag = this.options.sessionManager.formatTaskTag(task);
     }
 
-    // Send typing action
-    await this.sendAction(chatId, 'typing');
-
-    // Assemble memory prompt context
-    let contextPrompt = '';
-    if (this.options.memoryManager && sessionId) {
-      const ctx = await this.options.memoryManager.buildPromptContext({
-        userId,
-        sessionId,
-        maxTokens: 1000,
-        includeTiers: ['T1', 'T2'],
-      });
-      contextPrompt = ctx.systemPromptAdditions;
-    }
-
-    // Dynamic JIT model routing & on-demand provisioning
-    let activeTaskType: 'chat' | 'code' | 'reasoning' = 'chat';
-    const previousModel = this.options.llmProvider?.getModel?.();
-    if (this.options.llmProvider) {
-      const provisioner = new ModelProvisioner(this.options.llmProvider);
-      const decision = await provisioner.ensureAndDispatch({
-        prompt: text,
-        onProgress: async (msg) => {
-          await this.sendMessage(chatId, msg);
-          await this.sendAction(chatId, 'typing');
-        },
-      });
-      activeTaskType = decision.category === 'code' ? 'code' : decision.category === 'reasoning' ? 'reasoning' : 'chat';
-    }
-
-    // Automated research augmentation for questions & factual lookups
-    let researchFacts = '';
-    let sourcesFooter = '';
-    const lower = text.toLowerCase();
-    const isQuestion = lower.includes('?') || ['search', 'find', 'what', 'why', 'how', 'who', 'where', 'when', 'explain', 'tell me', 'lookup', 'research', 'latest', 'news', 'specs', 'architecture'].some((k) => lower.includes(k));
-
-    if (isQuestion) {
-      try {
-        const searchResults = await this.searchClient.search(text, { maxResults: 3 });
-        if (searchResults.length > 0) {
-          const extracted = searchResults.map((r) => this.distiller.extractText(r.snippet, r.url));
-          const report = this.consensus.buildReport([
-            {
-              claim: text,
-              sources: extracted.map((e) => ({ source: e.url, excerpt: e.content })),
-            },
-          ]);
-          researchFacts = `\n[Verified Research Facts]:\n${extracted.map((e, idx) => `[Source ${idx + 1}]: ${e.content}`).join('\n')}\nConsensus Score: ${(report.overallScore * 100).toFixed(0)}%\n`;
-          sourcesFooter = `\n\n📚 *Sources:*\n${extracted.map((e) => `- ${e.url}`).join('\n')}`;
-        }
-      } catch {
-        // Fallback silently if network/SearXNG offline
-      }
-    }
-
-    // Generate response using local LLM provider if configured
-    let responseText = '';
-    if (this.options.llmProvider) {
-      try {
-        const fullPrompt = CognitionEngine.formatPrompt(text, {
-          taskType: activeTaskType === 'code' ? 'code' : activeTaskType === 'reasoning' ? 'reasoning' : isQuestion ? 'research' : 'chat',
-          memoryContext: contextPrompt,
-          researchFacts,
-          activeModel: this.options.llmProvider.getModel(),
+    await this.withTypingIndicator(chatId, async () => {
+      // Assemble memory prompt context
+      let contextPrompt = '';
+      if (this.options.memoryManager && sessionId) {
+        const ctx = await this.options.memoryManager.buildPromptContext({
+          userId,
+          sessionId,
+          maxTokens: 1000,
+          includeTiers: ['T1', 'T2'],
         });
-        const res = await this.options.llmProvider.generate(fullPrompt);
-        responseText = typeof res === 'string' ? res : (res as any)?.text ?? String(res);
-      } catch (err: any) {
-        responseText = `Inference failed: ${err.message}`;
-      } finally {
-        if (previousModel && this.options.llmProvider?.setModel) {
-          this.options.llmProvider.setModel(previousModel);
+        contextPrompt = ctx.systemPromptAdditions;
+      }
+
+      // Dynamic JIT model routing & on-demand provisioning
+      let activeTaskType: 'chat' | 'code' | 'reasoning' = 'chat';
+      const previousModel = this.options.llmProvider?.getModel?.();
+      if (this.options.llmProvider) {
+        const provisioner = new ModelProvisioner(this.options.llmProvider);
+        const decision = await provisioner.ensureAndDispatch({
+          prompt: text,
+          onProgress: async (msg) => {
+            await this.sendMessage(chatId, msg);
+            await this.sendAction(chatId, 'typing');
+          },
+        });
+        activeTaskType = decision.category === 'code' ? 'code' : decision.category === 'reasoning' ? 'reasoning' : 'chat';
+      }
+
+      // Automated research augmentation for questions & factual lookups
+      let researchFacts = '';
+      let sourcesFooter = '';
+      const lower = text.toLowerCase();
+      const isQuestion = lower.includes('?') || ['search', 'find', 'what', 'why', 'how', 'who', 'where', 'when', 'explain', 'tell me', 'lookup', 'research', 'latest', 'news', 'specs', 'architecture'].some((k) => lower.includes(k));
+
+      if (isQuestion) {
+        try {
+          const searchResults = await this.searchClient.search(text, { maxResults: 3 });
+          if (searchResults.length > 0) {
+            const extracted = searchResults.map((r) => this.distiller.extractText(r.snippet, r.url));
+            const report = this.consensus.buildReport([
+              {
+                claim: text,
+                sources: extracted.map((e) => ({ source: e.url, excerpt: e.content })),
+              },
+            ]);
+            researchFacts = `\n[Verified Research Facts]:\n${extracted.map((e, idx) => `[Source ${idx + 1}]: ${e.content}`).join('\n')}\nConsensus Score: ${(report.overallScore * 100).toFixed(0)}%\n`;
+            sourcesFooter = `\n\n📚 *Sources:*\n${extracted.map((e) => `- ${e.url}`).join('\n')}`;
+          }
+        } catch {
+          // Fallback silently if network/SearXNG offline
         }
       }
-    } else {
-      responseText = `Jarvis received your request in ${taskTag || 'session'}.\n\n"${text}"`;
-    }
 
-    const finalMessage = taskTag ? `${taskTag}\n\n${responseText}${sourcesFooter}` : `${responseText}${sourcesFooter}`;
-    await this.sendMessage(chatId, finalMessage);
+      // Simultaneous Multi-Model Ensemble Generation (if enabled or requested)
+      const wantsEnsemble = this.ensembleMode || lower.includes('ensemble') || lower.includes('both models') || lower.includes('compare models');
+      let responseText = '';
+
+      if (wantsEnsemble) {
+        try {
+          const ensembleResult = await this.ensemble.generateSimultaneous(text, {
+            taskType: activeTaskType === 'code' ? 'code' : activeTaskType === 'reasoning' ? 'reasoning' : isQuestion ? 'research' : 'chat',
+            memoryContext: contextPrompt,
+            researchFacts,
+          });
+          responseText = MultiModelEnsemble.formatEnsembleResponse(ensembleResult, lower.includes('compare'));
+        } catch (err: any) {
+          // Fallback to single model if ensemble failed
+        }
+      }
+
+      // Standard single-model inference fallback
+      if (!responseText) {
+        if (this.options.llmProvider) {
+          try {
+            const fullPrompt = CognitionEngine.formatPrompt(text, {
+              taskType: activeTaskType === 'code' ? 'code' : activeTaskType === 'reasoning' ? 'reasoning' : isQuestion ? 'research' : 'chat',
+              memoryContext: contextPrompt,
+              researchFacts,
+              activeModel: this.options.llmProvider.getModel(),
+            });
+            const res = await this.options.llmProvider.generate(fullPrompt);
+            responseText = typeof res === 'string' ? res : (res as any)?.text ?? String(res);
+          } catch (err: any) {
+            responseText = `Inference failed: ${err.message}`;
+          } finally {
+            if (previousModel && this.options.llmProvider?.setModel) {
+              this.options.llmProvider.setModel(previousModel);
+            }
+          }
+        } else {
+          responseText = `Jarvis received your request in ${taskTag || 'session'}.\n\n"${text}"`;
+        }
+      }
+
+      const finalMessage = taskTag ? `${taskTag}\n\n${responseText}${sourcesFooter}` : `${responseText}${sourcesFooter}`;
+      await this.sendMessage(chatId, finalMessage);
+    });
   }
 
   /**
