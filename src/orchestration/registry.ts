@@ -150,20 +150,20 @@ export class ModelRegistry {
       notes: 'Flagship 70B reasoning model with explicit <think> tokens',
     });
 
-    // 7. Flagship World Knowledge & Heavy Synthesis: Qwen 72B
+    // 7. Flagship World Knowledge & Heavy Synthesis: Qwen 3 72B
     this.register({
-      id: 'qwen2.5:72b',
-      name: 'Qwen 72B Instruct',
+      id: 'qwen3:72b',
+      name: 'Qwen 3 72B Instruct',
       lane: 'deep',
       family: 'qwen',
       parameterSize: '72B',
       quantization: 'q4_k_m',
-      memoryRequirementBytes: 43.0 * 1024 * 1024 * 1024,
+      memoryRequirementBytes: 47.4 * 1024 * 1024 * 1024,
       contextLength: 32768,
-      measuredTokensPerSec: 9.8,
-      strengths: ['flagship synthesis', 'massive world knowledge', 'complex multi-domain intelligence'],
+      measuredTokensPerSec: 10.5,
+      strengths: ['flagship synthesis', 'massive world knowledge', 'complex multi-domain intelligence', 'advanced reasoning'],
       isPrimary: false,
-      notes: 'Flagship 72B dense intelligence model',
+      notes: 'Flagship Qwen 3 72B dense intelligence model (Q4_K_M)',
     });
 
     // 8. Extreme Context & Linear Attention Lane: Kimi Linear 48B-A3B-Instruct
