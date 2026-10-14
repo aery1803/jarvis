@@ -1,6 +1,6 @@
 import { DocumentStore, Collection } from '../storage/collection.js';
 import { ActionGateway } from '../devagent/action-gateway.js';
-import { EmailMessage, EmailImportance, SendEmailPayload } from './types.js';
+import type { EmailMessage, EmailImportance, SendEmailPayload } from './types.js';
 
 export interface RawEmailInput {
   id?: string;

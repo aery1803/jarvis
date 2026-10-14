@@ -366,8 +366,8 @@ async function loadModels() {
       data.models.forEach((m) => {
         const opt = document.createElement('option');
         opt.value = m;
-        const lane = m.includes('coder') ? '(Code Lane - ~38 t/s)' : '(Reasoning Lane - ~41 t/s)';
-        opt.textContent = `${m} ${lane}`;
+        // Lane only; throughput depends on the model size, so no fixed t/s figure is shown here.
+        opt.textContent = m.includes('coder') ? `${m} (code)` : m;
         if (m === data.active || m.includes('7b')) {
           opt.selected = true;
           currentModelTag.textContent = m;

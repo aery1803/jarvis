@@ -33,6 +33,7 @@ import { ModelProvisioner } from '../orchestration/provisioner.js';
 import { logger } from '../utils/logger.js';
 import { config } from '../config.js';
 import { assertSafeBinding, isClientAllowed, isLoopbackAddress } from './access.js';
+import { collectDiagnostics } from './diagnostics.js';
 
 export interface WebServerOptions {
   port?: number;
@@ -156,6 +157,16 @@ export class JarvisWebServer {
             totalMemoryBytes: os.totalmem(),
           })
         );
+        return;
+      }
+
+      // 1b. Diagnostics API: both memory pools, GPU devices, and what Ollama has installed and resident.
+      // `/api/health` reports `os.freemem()`, which on this box only covers the ~31.65 GB Windows partition;
+      // model weights live in the separate Vulkan pool that Node cannot see (see web/diagnostics.ts).
+      if (pathname === '/api/diagnostics' && method === 'GET') {
+        const diagnostics = await collectDiagnostics(config.ollamaBaseUrl);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(diagnostics, null, 2));
         return;
       }
 

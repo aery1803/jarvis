@@ -1,4 +1,4 @@
-import { DistilledPageView, DistilledElement, BrowserAction, BrowserActionResult } from './types.js';
+import type { DistilledPageView, DistilledElement, BrowserAction, BrowserActionResult } from './types.js';
 import { ActionGateway } from '../devagent/action-gateway.js';
 
 export class BrowserAutomationEngine {

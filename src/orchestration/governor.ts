@@ -1,5 +1,5 @@
 import { CapabilityChecker } from './capability.js';
-import { ModelDefinition } from './registry.js';
+import type { ModelDefinition } from './registry.js';
 
 export interface MemoryGovernorOptions {
   capabilityChecker?: CapabilityChecker;

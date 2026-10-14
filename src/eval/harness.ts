@@ -1,4 +1,4 @@
-import { LLMProvider } from '../services/provider.js';
+import type { LLMProvider } from '../services/provider.js';
 
 export interface EvalTestCase {
   id: string;

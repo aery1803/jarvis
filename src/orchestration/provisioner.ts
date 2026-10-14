@@ -10,7 +10,7 @@
  * 3. On-Demand Auto-Pull: Auto-downloads missing models on-demand, executes, and returns.
  */
 
-import { LLMProvider } from '../services/provider.js';
+import type { LLMProvider } from '../services/provider.js';
 import { logger } from '../utils/logger.js';
 
 export interface ProvisionRequest {

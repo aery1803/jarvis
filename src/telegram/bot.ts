@@ -1,5 +1,5 @@
 import os from 'node:os';
-import {
+import type {
   TelegramUpdate,
   TelegramMessage,
   SendMessageOptions,
@@ -9,7 +9,7 @@ import { SessionManager } from '../sessions/manager.js';
 import type { NewJarvisMessage } from '../sessions/types.js';
 import { MemoryManager } from '../memory/manager.js';
 import { KillSwitch } from '../security/kill-switch.js';
-import { LLMProvider, OllamaProvider } from '../services/provider.js';
+import { type LLMProvider, OllamaProvider } from '../services/provider.js';
 import { SearXNGClient } from '../services/searxng.js';
 import { ContentDistiller } from '../services/scraper.js';
 import { ConsensusEngine } from '../services/consensus.js';

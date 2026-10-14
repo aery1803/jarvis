@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { CapabilityChecker } from '../src/orchestration/capability.js';
-import { ModelDefinition } from '../src/orchestration/registry.js';
+import type { ModelDefinition } from '../src/orchestration/registry.js';
 
 describe('CapabilityChecker', () => {
   const dummyModel: ModelDefinition = {

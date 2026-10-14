@@ -5,7 +5,7 @@
 
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { MultiModelEnsemble, EnsembleResult } from '../src/orchestration/ensemble.js';
+import { MultiModelEnsemble, type EnsembleResult } from '../src/orchestration/ensemble.js';
 
 describe('MultiModelEnsemble', () => {
   test('should format ensemble response with model attribution and consensus score', () => {

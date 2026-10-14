@@ -1,4 +1,5 @@
 import { DocumentStore, Collection } from '../storage/collection.js';
+import { newestFirst } from '../utils/ordering.js';
 
 export interface LedgerEntry {
   _id?: string;
@@ -50,7 +51,7 @@ export class CostLedger {
 
   async listRecent(limit = 20): Promise<LedgerEntry[]> {
     const all = await this.collection.find({});
-    return all.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()).slice(0, limit);
+    return newestFirst(all, (entry) => entry.timestamp).slice(0, limit);
   }
 
   async getSummary(filter: Partial<Pick<LedgerEntry, 'agentId' | 'modelId' | 'lane'>> = {}): Promise<LedgerSummary> {

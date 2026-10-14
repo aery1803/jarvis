@@ -1,4 +1,4 @@
-import { ModelRegistry, ModelDefinition, ModelLane } from './registry.js';
+import { ModelRegistry, type ModelDefinition, type ModelLane } from './registry.js';
 import { MemoryGovernor } from './governor.js';
 
 export interface RouteRequest {

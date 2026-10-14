@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { DocumentStore, Collection } from '../storage/collection.js';
-import {
+import { newestFirst } from '../utils/ordering.js';
+import type {
   ActiveSessionPointer,
   ImportedJarvisMessage,
   JarvisMessage,
@@ -62,9 +63,10 @@ export class SessionManager {
     return this.sessionCollection.findOne({ userId, id: sessionId });
   }
 
+  /** Most recently active first; same-millisecond ties fall back to insertion order (see utils/ordering.ts). */
   async listSessions(userId: string): Promise<JarvisSession[]> {
     const list = await this.sessionCollection.find({ userId });
-    return list.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+    return newestFirst(list, (session) => session.updatedAt);
   }
 
   async updateSessionTitle(userId: string, sessionId: string, newTitle: string): Promise<boolean> {

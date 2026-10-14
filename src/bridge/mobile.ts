@@ -1,4 +1,4 @@
-import { MobileDeviceStatus, MobileNotification } from './types.js';
+import type { MobileDeviceStatus, MobileNotification } from './types.js';
 
 export class MobileBridge {
   private connectedDevices: Map<string, MobileDeviceStatus> = new Map();

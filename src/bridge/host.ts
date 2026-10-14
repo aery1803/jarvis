@@ -1,6 +1,6 @@
 import { execSync } from 'node:child_process';
 import os from 'node:os';
-import { HostCommand, HostCommandResult, ScreenState } from './types.js';
+import type { HostCommand, HostCommandResult, ScreenState } from './types.js';
 import { ActionGateway } from '../devagent/action-gateway.js';
 
 export class HostBridge {

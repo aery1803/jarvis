@@ -1,5 +1,5 @@
-import { AgentRole, AgentBudget, AgentTaskRequest, AgentTaskResponse, BlackboardItem } from './types.js';
-import { LLMProvider } from '../services/provider.js';
+import type { AgentRole, AgentBudget, AgentTaskRequest, AgentTaskResponse, BlackboardItem } from './types.js';
+import type { LLMProvider } from '../services/provider.js';
 import { CostLedger } from '../orchestration/ledger.js';
 
 const DEFAULT_BUDGET: AgentBudget = {

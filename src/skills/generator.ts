@@ -1,5 +1,5 @@
 import { DocumentStore, Collection } from '../storage/collection.js';
-import { SkillManifest, SandboxTestResult } from './types.js';
+import type { SkillManifest, SandboxTestResult } from './types.js';
 
 export class SkillGenerator {
   private collection: Collection<SkillManifest>;

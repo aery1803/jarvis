@@ -1,5 +1,6 @@
 import { DocumentStore, Collection } from '../storage/collection.js';
 import { SessionManager } from '../sessions/manager.js';
+import { newestFirst } from '../utils/ordering.js';
 
 export interface AuditLogEntry {
   _id?: string;
@@ -75,8 +76,12 @@ export class KillSwitch {
     return record;
   }
 
+  /**
+   * Newest first. Trigger and reset routinely land in the same millisecond, so ordering by timestamp alone
+   * would let the superseded event be reported as the current one (see utils/ordering.ts).
+   */
   async getRecentAuditLogs(limit = 20): Promise<AuditLogEntry[]> {
     const list = await this.auditCollection.find({});
-    return list.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()).slice(0, limit);
+    return newestFirst(list, (entry) => entry.timestamp).slice(0, limit);
   }
 }

@@ -100,15 +100,13 @@ function fitLines(header: string, lines: string[], maxChars: number): string {
   return kept.length > 0 ? [header, ...kept].join('\n') : '';
 }
 
+/** Expects `getSessionSummaries` order (newest first), so the first summary seen per session is its latest. */
 function latestSummaryPerSession(summaries: SessionSummary[]): SessionSummary[] {
   const latest = new Map<string, SessionSummary>();
   for (const summary of summaries) {
-    const existing = latest.get(summary.sessionId);
-    if (!existing || new Date(summary.createdAt).getTime() > new Date(existing.createdAt).getTime()) {
-      latest.set(summary.sessionId, summary);
-    }
+    if (!latest.has(summary.sessionId)) latest.set(summary.sessionId, summary);
   }
-  return [...latest.values()].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  return [...latest.values()];
 }
 
 function knowledgeKeywords(prompt: string): string[] {

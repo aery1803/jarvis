@@ -4,8 +4,8 @@
  * corroborates candidate outputs, and synthesizes a high-confidence consensus answer.
  */
 
-import { LLMProvider, OllamaProvider } from '../services/provider.js';
-import { CognitionEngine, CognitionOptions } from '../agents/cognition.js';
+import { type LLMProvider, OllamaProvider } from '../services/provider.js';
+import { CognitionEngine, type CognitionOptions } from '../agents/cognition.js';
 import { ConsensusEngine } from '../services/consensus.js';
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';

@@ -1,4 +1,4 @@
-import { OcrResult, FrameSample } from './types.js';
+import type { OcrResult, FrameSample } from './types.js';
 
 export class MediaService {
   /**

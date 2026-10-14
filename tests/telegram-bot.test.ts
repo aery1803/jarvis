@@ -7,7 +7,7 @@ import { SessionManager } from '../src/sessions/manager.js';
 import { MemoryManager } from '../src/memory/manager.js';
 import { KillSwitch } from '../src/security/kill-switch.js';
 import { TelegramBotClient } from '../src/telegram/bot.js';
-import { TelegramUpdate } from '../src/telegram/types.js';
+import type { TelegramUpdate } from '../src/telegram/types.js';
 import { MockLLMProvider } from '../src/services/provider.js';
 import { ChatStore } from '../src/storage/chat-store.js';
 

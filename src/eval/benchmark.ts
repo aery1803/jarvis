@@ -3,7 +3,7 @@
  * Evaluates local and remote LLMs across Reasoning, Coding, Tool Calling, and Retrieval.
  */
 
-import { LLMProvider } from '../services/provider.js';
+import type { LLMProvider } from '../services/provider.js';
 import { CognitionEngine } from '../agents/cognition.js';
 import os from 'node:os';
 

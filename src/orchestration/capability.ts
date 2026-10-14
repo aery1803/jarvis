@@ -1,5 +1,5 @@
 import os from 'node:os';
-import { ModelDefinition } from './registry.js';
+import type { ModelDefinition } from './registry.js';
 
 export interface CapabilityCheckResult {
   canRun: boolean;

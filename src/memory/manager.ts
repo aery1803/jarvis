@@ -1,5 +1,5 @@
 import { DocumentStore, Collection } from '../storage/collection.js';
-import {
+import type {
   MemoryTier,
   OwnerProfileFact,
   SessionSummary,
@@ -10,6 +10,7 @@ import {
   PromptContextResult,
 } from './types.js';
 import { encryptSensitive, decryptSensitive } from './crypto.js';
+import { newestByCreatedAt } from '../utils/ordering.js';
 
 export class MemoryManager {
   private profileCollection: Collection<OwnerProfileFact>;
@@ -115,7 +116,7 @@ export class MemoryManager {
       filter.sessionId = sessionId;
     }
     const all = await this.summaryCollection.find(filter);
-    return all.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, limit);
+    return newestByCreatedAt(all).slice(0, limit);
   }
 
   // --- T3: Episodic Memory ---
@@ -132,7 +133,7 @@ export class MemoryManager {
 
   async queryEpisodes(filter: Partial<Pick<EpisodicMemory, 'userId' | 'sessionId' | 'feedback'>>, limit = 10): Promise<EpisodicMemory[]> {
     const all = await this.episodicCollection.find(filter as Record<string, unknown>);
-    return all.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, limit);
+    return newestByCreatedAt(all).slice(0, limit);
   }
 
   // --- T4: Knowledge Memory ---
