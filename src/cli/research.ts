@@ -7,6 +7,7 @@ import path from 'node:path';
 import { SearXNGClient } from '../services/searxng.js';
 import { ContentDistiller } from '../services/scraper.js';
 import { ConsensusEngine } from '../services/consensus.js';
+import { CognitionEngine } from '../agents/cognition.js';
 import { OllamaProvider, MockLLMProvider } from '../services/provider.js';
 import { DocumentStore } from '../storage/collection.js';
 import { logger } from '../utils/logger.js';
@@ -71,17 +72,12 @@ export async function runResearch(query: string): Promise<ResearchSessionDoc> {
   });
 
   let synthesis = '';
-  const prompt = `You are Jarvis, a local privacy-first research assistant.
-Research Query: "${query}"
-
-Source Observations:
-${distilledSources.map((s, i) => `[Source ${i + 1}] (${s.url}):\n${s.content}`).join('\n\n')}
-
-Consensus Evaluation:
-- Confidence Score: ${consensusReport.overallScore}
-- Status: ${consensusReport.summary}
-
-Provide a concise, factual synthesis answering the query. Cite sources [Source N] clearly.`;
+  const prompt = CognitionEngine.formatPrompt(query, {
+    taskType: 'research',
+    researchFacts: distilledSources.map((s, i) => `[Source ${i + 1}] (${s.url}):\n${s.content}`).join('\n\n'),
+    consensusScore: consensusReport.overallScore,
+    activeModel: 'qwen2.5:7b',
+  });
 
   try {
     synthesis = await provider.generate(prompt, { maxTokens: 512 });
