@@ -31,9 +31,14 @@ import { ModelBenchmarkSuite } from '../eval/benchmark.js';
 import { ModelProvisioner } from '../orchestration/provisioner.js';
 import { logger } from '../utils/logger.js';
 import { config } from '../config.js';
+import { assertSafeBinding, isClientAllowed, isLoopbackAddress } from './access.js';
 
 export interface WebServerOptions {
   port?: number;
+  /** Bind address; defaults to `JARVIS_WEB_HOST` or 127.0.0.1. */
+  host?: string;
+  /** LAN client IPs allowed in addition to loopback; defaults to `JARVIS_WEB_ALLOWED_IPS`. */
+  allowedIps?: string[];
   chatStore?: ChatStore;
   /** Shared with the Telegram bot so both surfaces read and write one memory. */
   memoryManager?: MemoryManager;
@@ -63,6 +68,8 @@ function streamFromProvider(provider: LLMProvider, prompt: string, options: Gene
 
 export class JarvisWebServer {
   private port: number;
+  private host: string;
+  private allowedIps: string[];
   private server: http.Server | null = null;
   private chatStore: ChatStore;
   private publicDir: string;
@@ -72,6 +79,8 @@ export class JarvisWebServer {
 
   constructor(options: WebServerOptions = {}) {
     this.port = options.port ?? 3000;
+    this.host = options.host ?? config.webHost;
+    this.allowedIps = options.allowedIps ?? config.webAllowedIps;
     this.chatStore = options.chatStore ?? new ChatStore(path.join(process.cwd(), 'data', 'chat.db'));
     this.memoryManager = options.memoryManager ?? null;
     this.userId = options.userId ?? 'owner';
@@ -80,10 +89,14 @@ export class JarvisWebServer {
   }
 
   public async start(): Promise<void> {
+    assertSafeBinding(this.host, this.allowedIps);
     return new Promise((resolve) => {
       this.server = http.createServer((req, res) => this.handleRequest(req, res));
-      this.server.listen(this.port, '127.0.0.1', () => {
-        logger.info(`[JarvisWebServer] Online at http://127.0.0.1:${this.port}`);
+      this.server.listen(this.port, this.host, () => {
+        logger.info(`[JarvisWebServer] Online at http://${this.host}:${this.port}`);
+        if (!isLoopbackAddress(this.host)) {
+          logger.warn(`[JarvisWebServer] LAN access enabled for: ${this.allowedIps.join(', ')} (plus loopback).`);
+        }
         resolve();
       });
     });
@@ -109,6 +122,13 @@ export class JarvisWebServer {
     const url = new URL(req.url ?? '/', `http://${req.headers.host}`);
     const pathname = url.pathname;
     const method = req.method ?? 'GET';
+
+    if (!isClientAllowed(req.socket.remoteAddress, this.allowedIps)) {
+      logger.warn(`[JarvisWebServer] Refused ${req.socket.remoteAddress ?? 'unknown client'}: not loopback or in JARVIS_WEB_ALLOWED_IPS`);
+      res.writeHead(403, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Forbidden' }));
+      return;
+    }
 
     // CORS Headers for local development
     res.setHeader('Access-Control-Allow-Origin', '*');

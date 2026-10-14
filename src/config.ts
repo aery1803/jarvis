@@ -7,6 +7,8 @@ import { z } from 'zod';
 import dotenv from 'dotenv';
 import path from 'node:path';
 import os from 'node:os';
+import { loadExternalSettings } from './security/credentials.js';
+import { parseAllowedIps } from './web/access.js';
 
 dotenv.config();
 
@@ -22,7 +24,14 @@ const ConfigSchema = z.object({
   logLevel: z.enum(['DEBUG', 'INFO', 'WARN', 'ERROR']).default('INFO'),
   ollamaBaseUrl: z.string().default('http://127.0.0.1:11434'),
   llamaServerBaseUrl: z.string().default('http://127.0.0.1:8080'),
+  webHost: z.string().default('127.0.0.1'),
+  webAllowedIps: z.array(z.string()).default([]),
 });
+
+/** Environment variables win over `%USERPROFILE%\.jarvis\settings.env`. */
+function setting(key: string): string | undefined {
+  return process.env[key] ?? loadExternalSettings()[key];
+}
 
 export type JarvisConfig = z.infer<typeof ConfigSchema>;
 
@@ -49,6 +58,8 @@ export function loadConfig(overrides: Partial<JarvisConfig> = {}): JarvisConfig 
     logLevel: (process.env.JARVIS_LOG_LEVEL as any) ?? 'INFO',
     ollamaBaseUrl: process.env.JARVIS_OLLAMA_URL ?? 'http://127.0.0.1:11434',
     llamaServerBaseUrl: process.env.JARVIS_LLAMA_URL ?? 'http://127.0.0.1:8080',
+    webHost: setting('JARVIS_WEB_HOST') ?? '127.0.0.1',
+    webAllowedIps: parseAllowedIps(setting('JARVIS_WEB_ALLOWED_IPS')),
     ...overrides,
   });
 
