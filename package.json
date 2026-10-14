@@ -13,7 +13,9 @@
     "web": "tsx src/cli/web.ts",
     "telegram": "tsx src/cli/telegram.ts",
     "preflight": "powershell -ExecutionPolicy Bypass -File scripts/preflight.ps1",
-    "benchmark": "powershell -ExecutionPolicy Bypass -File scripts/benchmark.ps1"
+    "benchmark": "powershell -ExecutionPolicy Bypass -File scripts/benchmark.ps1",
+    "searxng": "docker compose up -d searxng",
+    "searxng:down": "docker compose down"
   },
   "dependencies": {
     "dotenv": "18.0.7",
