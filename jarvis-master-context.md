@@ -1,7 +1,7 @@
 # Jarvis Local AI Agent: Master Design and Context Document
 
-**Version:** v3.3 (Gate 0 & Phase 0/0b Complete, Phase 1 Core Engine & Research Skill Implemented)
-**Status:** **IN PROGRESS - PHASE 1 CORE & RESEARCH SKILL.** Gate 0 verified; Phase 0 (FEAT-001) and Phase 0b (FEAT-002) merged into `main` and marked `Done`. Phase 1 (FEAT-003: Core Engine, Document Store & Research Skill) implemented with typed MongoDB-style Collection layer over native SQLite, unified LLM provider interface (Ollama `qwen2.5:7b`), SearXNG metasearch, taint-tracking web scraper, multi-source consensus engine, and interactive research CLI passing 32/32 tests (100%).
+**Version:** v3.4 (Gate 0, Phase 0/0b, Phase 1 Complete; FEAT-004 Web Chat UI Implemented)
+**Status:** **IN PROGRESS - FEAT-004 CLAUDE/GEMINI WEB CHAT UI & SESSIONS.** Gate 0, Phase 0 (FEAT-001), Phase 0b (FEAT-002), and Phase 1 (FEAT-003) merged into `main` and marked `Done`. Feature FEAT-004 (Claude/Gemini-style Local Web Chat Interface & Session Storage) implemented on `http://localhost:3000` with real-time SSE streaming, collapsible sidebar chat history, dark-mode markdown/code highlighting, and MongoDB-style SQLite `ChatStore` passing 40/40 unit tests (100%).
 **Purpose:** The single source of truth for the Jarvis project. Holds the complete architecture, verified hardware baseline, decisions, and live Gate 0 checklist.
 
 **Labels used throughout**
