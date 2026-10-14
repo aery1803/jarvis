@@ -38,7 +38,18 @@ export class ModelProvisioner {
   classifyTask(prompt: string, explicitType?: string): { model: string; category: 'precision' | 'code' | 'reasoning' | 'chat' | 'vision'; is30BClass: boolean; rationale: string } {
     const lower = prompt.toLowerCase();
 
-    // 0. Flagship Deep Reasoning & Math -> DeepSeek R1 70B or Nemotron 49B
+    // 0. Extreme Long Context & Linear Attention -> Kimi Linear 48B-A3B (1M Context)
+    const kimiRegex = /\b(kimi|linear attention|1m context|million tokens|massive document|book analysis)\b/i;
+    if (explicitType === 'kimi' || explicitType === 'linear' || kimiRegex.test(lower)) {
+      return {
+        model: 'kimi-linear-48b-a3b:instruct',
+        category: 'reasoning',
+        is30BClass: true,
+        rationale: 'Kimi Linear 48B-A3B with 1M context window and fast 3B active linear attention.',
+      };
+    }
+
+    // 0b. Flagship Deep Reasoning & Math -> DeepSeek R1 70B or Nemotron 49B
     const deepReasoningRegex = /\b(deepseek|r1|70b|nemotron|49b|deep math|rigorous proof|symbolic logic|formal proof|complex deduction)\b/i;
     if (explicitType === 'deepseek' || explicitType === '70b' || explicitType === 'nemotron' || deepReasoningRegex.test(lower)) {
       return {

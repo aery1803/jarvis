@@ -12,6 +12,7 @@ const modelsToDownload = [
   { id: 'qwen3.8:27b', size: '~16.5 GB', desc: 'Qwen 3.8 27B High-Accuracy Reasoning' },
   { id: 'qwen3:32b', size: '~20 GB', desc: 'Qwen 3 32B Dense Powerhouse' },
   { id: 'rnogy/Nvidia_Llama-3_3-Nemotron-Super-49B-v1_5:q4_K_M', size: '~30.2 GB', desc: 'NVIDIA Llama 3.3 Nemotron Super 49B v1.5 Reasoning' },
+  { id: 'bartowski/moonshotai_Kimi-Linear-48B-A3B-Instruct-GGUF', isGGUF: true, hfRepo: 'bartowski/moonshotai_Kimi-Linear-48B-A3B-Instruct-GGUF', hfFile: 'moonshotai_Kimi-Linear-48B-A3B-Instruct-Q4_K_M.gguf', size: '~29.8 GB', desc: 'Moonshot AI Kimi Linear 48B-A3B MoE (3B Active, 1M Context)' },
   { id: 'deepseek-r1:70b', size: '~43 GB', desc: 'DeepSeek R1 70B Flagship CoT Reasoning' },
   { id: 'qwen2.5:72b', size: '~43 GB', desc: 'Qwen 72B Flagship Multi-Domain Synthesis' }
 ];

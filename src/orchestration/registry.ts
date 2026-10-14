@@ -166,6 +166,22 @@ export class ModelRegistry {
       notes: 'Flagship 72B dense intelligence model',
     });
 
+    // 8. Extreme Context & Linear Attention Lane: Kimi Linear 48B-A3B-Instruct
+    this.register({
+      id: 'kimi-linear-48b-a3b:instruct',
+      name: 'Kimi Linear 48B-A3B Instruct',
+      lane: 'deep',
+      family: 'kimi',
+      parameterSize: '48B (3B Active)',
+      quantization: 'q4_k_m',
+      memoryRequirementBytes: 29.8 * 1024 * 1024 * 1024, // ~29.8 GB Q4_K_M
+      contextLength: 1048576, // 1M token context
+      measuredTokensPerSec: 62.0, // 3B active MoE allows high generation throughput
+      strengths: ['1M extreme long context', 'linear delta attention', 'efficient 3B active MoE inference', 'deep document analysis'],
+      isPrimary: false,
+      notes: 'Moonshot AI 48B MoE with 3B active parameters and 1M context via Kimi Delta Attention (KDA)',
+    });
+
     // 8. Code Lane - Primary: Qwen 3 8B / Qwen 2.5 Coder
     this.register({
       id: 'qwen2.5-coder:7b',
