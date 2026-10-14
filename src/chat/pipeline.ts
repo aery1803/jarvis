@@ -42,6 +42,7 @@ import { SessionNotFoundError } from '../sessions/manager.js';
 import { logger } from '../utils/logger.js';
 import { gatherResearch, shouldResearchPrompt } from './research.js';
 import { ThinkStreamFilter, stripThinking } from './thinking.js';
+import { resolveThink } from '../services/thinking-control.js';
 
 export { shouldResearchPrompt } from './research.js';
 
@@ -522,6 +523,10 @@ export async function runChatTurn(rt: JarvisRuntime, input: TurnInput, onEvent: 
             promptTokens: usage.promptTokens,
             completionTokens: usage.completionTokens,
             latencyMs: usage.totalDurationMs ?? Date.now() - passStartedAt,
+            loadMs: usage.loadDurationMs,
+            promptEvalMs: usage.promptEvalDurationMs,
+            decodeMs: usage.evalDurationMs,
+            doneReason: usage.doneReason,
           })
           .catch((err: unknown) => logger.warn(`[ChatPipeline] Ledger write failed: ${errorMessage(err)}`))
       );
@@ -553,6 +558,7 @@ export async function runChatTurn(rt: JarvisRuntime, input: TurnInput, onEvent: 
       const options: GenerateStreamOptions = {
         maxTokens: maxOutputTokens,
         contextTokens,
+        think: resolveThink(rt.config.thinkingMode, model, decision.category),
         signal: AbortSignal.any([turn.signal, watchdog.signal]),
         onUsage: (usage) => {
           if (usage.truncated) truncated = true;
@@ -842,6 +848,7 @@ export async function runChatTurn(rt: JarvisRuntime, input: TurnInput, onEvent: 
                   turns: messages.map((message) => ({ role: message.role, content: message.content })),
                   signal: summaryAbort.signal,
                   timeoutMs: SUMMARY_TIMEOUT_MS,
+                  think: resolveThink(rt.config.thinkingMode, summarizerModel, 'chat'),
                 }),
               { timeoutMs: SUMMARY_LEASE_WAIT_MS, signal: summaryAbort.signal }
             );

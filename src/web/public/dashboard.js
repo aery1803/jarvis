@@ -144,14 +144,17 @@ function buildLedger() {
       clear(card.body).append(stateLine('empty', 'No model calls recorded yet. Send a chat message and the real usage appears here.'));
       return;
     }
-    const modelRows = Object.entries(byModel ?? {}).map(([model, s]) => [model, String(s.totalInvocations), String(s.totalPromptTokens), String(s.totalCompletionTokens), `${number(s.avgTokensPerSec).toFixed(1)}`, formatDuration(s.avgLatencyMs)]);
-    const recentRows = (recent ?? []).map((entry) => [formatTime(entry.timestamp), entry.modelId, entry.lane, `${entry.promptTokens} / ${entry.completionTokens}`, number(entry.tokensPerSec).toFixed(1), formatDuration(entry.latencyMs)]);
+    // Rows written before the backend counters were captured carry no decode speed or load time; they show a dash, never a made-up zero.
+    const optionalRate = (value) => (typeof value === 'number' && Number.isFinite(value) ? value.toFixed(1) : '-');
+    const optionalDuration = (value) => (typeof value === 'number' && Number.isFinite(value) ? formatDuration(value) : '-');
+    const modelRows = Object.entries(byModel ?? {}).map(([model, s]) => [model, String(s.totalInvocations), String(s.totalPromptTokens), String(s.totalCompletionTokens), optionalRate(s.avgDecodeTokensPerSec), `${number(s.avgTokensPerSec).toFixed(1)}`, optionalDuration(s.avgLoadMs), formatDuration(s.avgLatencyMs)]);
+    const recentRows = (recent ?? []).map((entry) => [formatTime(entry.timestamp), entry.modelId, entry.lane, `${entry.promptTokens} / ${entry.completionTokens}`, optionalRate(entry.decodeTokensPerSec), number(entry.tokensPerSec).toFixed(1), optionalDuration(entry.loadMs), formatDuration(entry.latencyMs)]);
     clear(card.body).append(
-      h('p', { class: 'card-summary', dataset: { testid: 'ledger-summary' } }, `${summary.totalInvocations} calls, ${summary.totalTokens} tokens (${summary.totalPromptTokens} prompt, ${summary.totalCompletionTokens} completion), ${number(summary.avgTokensPerSec).toFixed(1)} tokens/s on average, ${formatDuration(summary.avgLatencyMs)} average latency.`),
+      h('p', { class: 'card-summary', dataset: { testid: 'ledger-summary' } }, `${summary.totalInvocations} calls, ${summary.totalTokens} tokens (${summary.totalPromptTokens} prompt, ${summary.totalCompletionTokens} completion), ${optionalRate(summary.avgDecodeTokensPerSec)} decode tokens/s and ${number(summary.avgTokensPerSec).toFixed(1)} end-to-end tokens/s (includes model load, prompt evaluation and thinking) on average, ${formatDuration(summary.avgLatencyMs)} average latency.`),
       h('h4', {}, 'Per model'),
-      table(['Model', 'Calls', 'Prompt tokens', 'Completion tokens', 'Tokens/s', 'Avg latency'], modelRows, 'ledger-models'),
+      table(['Model', 'Calls', 'Prompt tokens', 'Completion tokens', 'Decode t/s', 'End-to-end t/s', 'Avg load', 'Avg latency'], modelRows, 'ledger-models'),
       h('h4', {}, 'Recent calls'),
-      table(['When', 'Model', 'Lane', 'Prompt / completion', 'Tokens/s', 'Latency'], recentRows, 'ledger-recent')
+      table(['When', 'Model', 'Lane', 'Prompt / completion', 'Decode t/s', 'End-to-end t/s', 'Load', 'Latency'], recentRows, 'ledger-recent')
     );
   };
   return card;
@@ -181,12 +184,13 @@ function buildBenchmark(getModels) {
       c.modelName,
       c.status === 'complete' ? badge(c.grade, 'ok') : c.status === 'partial' ? badge(`${c.grade} (partial)`, 'warn') : badge(String(c.status), 'error'),
       c.status === 'error' ? 'no score' : `${number(c.overallScore)}%`,
-      `${number(c.estimatedTokensPerSec)} (${c.tokensPerSecSource})`,
+      c.tokensPerSecSource === 'none' ? 'n/a' : `${number(c.decodeTokensPerSec ?? c.estimatedTokensPerSec)}`,
       formatDuration(c.avgLatencyMs),
+      typeof c.avgLoadMs === 'number' ? formatDuration(c.avgLoadMs) : '-',
       `${c.answeredCases} answered, ${c.erroredCases} errored`,
       formatTime(c.timestamp),
     ]);
-    results.append(table(['Model', 'Grade', 'Score', 'Tokens/s', 'Avg latency', 'Cases', 'Run at'], rows, 'benchmark-table'));
+    results.append(table(['Model', 'Grade', 'Score', 'Decode t/s', 'Avg latency', 'Avg load', 'Cases', 'Run at'], rows, 'benchmark-table'));
     cards.filter((c) => c.error).forEach((c) => results.append(stateLine('error', `${c.modelName}: ${c.error}`)));
   };
 

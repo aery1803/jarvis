@@ -12,6 +12,8 @@ import { OllamaProvider } from '../services/provider.js';
 import { DocumentStore } from '../storage/collection.js';
 import { logger } from '../utils/logger.js';
 import { config } from '../config.js';
+import { resolveThink } from '../services/thinking-control.js';
+import { LIVE_SEARCH_NOTICE } from '../chat/research.js';
 
 interface ResearchSessionDoc {
   id?: string;
@@ -32,7 +34,7 @@ export async function runResearch(query: string): Promise<ResearchSessionDoc> {
   const sessions = store.collection<ResearchSessionDoc>('sessions');
 
   // 2. Metasearch via SearXNG. `enableFallback: true` makes an unreachable engine come back as `source: 'none'`
-  // with a reason instead of an exception; the live DuckDuckGo fallback stays opt-in via `searchLiveFallback`.
+  // with a reason instead of an exception; the live DuckDuckGo fallback follows `searchLiveFallback` (on unless JARVIS_SEARCH_LIVE_FALLBACK=0).
   const searchClient = new SearXNGClient({
     baseUrl: config.searxngBaseUrl,
     enableFallback: true,
@@ -45,6 +47,7 @@ export async function runResearch(query: string): Promise<ResearchSessionDoc> {
     throw new Error(outcome.unavailableReason ?? 'The search engine returned no results, so there is nothing to synthesize from.');
   }
   logger.info(`[ResearchCLI] Found ${outcome.results.length} search results via ${outcome.source}`);
+  if (outcome.source === 'duckduckgo-live') logger.warn(`[ResearchCLI] ${LIVE_SEARCH_NOTICE}`);
 
   // 3. Fetch & distill the real pages (snippet fallback per result), with taint tracking
   const distiller = new ContentDistiller();
@@ -86,7 +89,7 @@ export async function runResearch(query: string): Promise<ResearchSessionDoc> {
   });
 
   try {
-    synthesis = await provider.generate(prompt, { maxTokens: 512 });
+    synthesis = await provider.generate(prompt, { maxTokens: 512, think: resolveThink(config.thinkingMode, config.defaultModel) });
   } catch (err: unknown) {
     store.close();
     throw new Error(`Local model ${config.defaultModel} could not synthesize an answer: ${err instanceof Error ? err.message : String(err)}`);

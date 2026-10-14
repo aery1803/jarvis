@@ -77,6 +77,8 @@ export interface SummarizeSessionArgs {
   signal?: AbortSignal;
   /** Longest the summary request may take. */
   timeoutMs?: number;
+  /** Ollama `think` for the summary call; a hidden reasoning block would eat the 200-token cap. */
+  think?: boolean;
 }
 
 export function estimateTokens(text: string): number {
@@ -356,7 +358,7 @@ export async function summarizeAndStoreSession(args: SummarizeSessionArgs): Prom
 
   try {
     const summary = redactSensitive(
-      stripThinking(await summarizer.generate(summaryPrompt, { maxTokens: 200, temperature: 0.2, signal: args.signal, timeoutMs: args.timeoutMs })).trim()
+      stripThinking(await summarizer.generate(summaryPrompt, { maxTokens: 200, temperature: 0.2, signal: args.signal, timeoutMs: args.timeoutMs, think: args.think })).trim()
     );
     if (!summary) return null;
     await memory.saveSessionSummary(userId, sessionId, summary, turns.length);

@@ -35,7 +35,7 @@ async function main(): Promise<void> {
     throw new Error('Ollama is reachable but has no installed models.');
   }
 
-  const suite = new ModelBenchmarkSuite();
+  const suite = new ModelBenchmarkSuite({ thinkingMode: config.thinkingMode });
   const abort = new AbortController();
   process.once('SIGINT', () => abort.abort());
 
@@ -63,7 +63,7 @@ async function main(): Promise<void> {
       const scored = scorecards.filter((c) => c.status === 'complete' || c.status === 'partial');
       scored.sort((a, b) => b.overallScore - a.overallScore);
       scored.forEach((c, i) => {
-        console.log(` #${i + 1} | ${c.modelName.padEnd(20)} | Score: ${c.overallScore}% (${c.grade}) | ${c.tokensPerSecSource === 'none' ? 'n/a' : `${c.estimatedTokensPerSec} t/s (${c.tokensPerSecSource})`} | Best for: ${c.recommendedLanes.join(', ') || 'none'}`);
+        console.log(` #${i + 1} | ${c.modelName.padEnd(20)} | Score: ${c.overallScore}% (${c.grade}) | ${c.tokensPerSecSource === 'none' ? 'n/a' : `${c.decodeTokensPerSec} decode t/s`} | Best for: ${c.recommendedLanes.join(', ') || 'none'}`);
       });
       for (const c of scorecards.filter((x) => x.status === 'error' || x.status === 'aborted')) {
         console.log(` --  | ${c.modelName.padEnd(20)} | ${c.status.toUpperCase()}: ${c.error ?? ''}`);

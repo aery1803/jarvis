@@ -714,6 +714,17 @@ describe('TelegramBotClient', () => {
       assert.match(lastText(), /qwen3:8b: 1 call\(s\), 120 prompt \+ 30 completion tokens/);
     });
 
+    test('/cost shows decode speed from the backend counters next to the end-to-end figure', async () => {
+      await harness.cleanup();
+      await setup({
+        scripts: [{ chunks: ['ok'], usage: { promptTokens: 120, completionTokens: 30, totalDurationMs: 6000, evalDurationMs: 500, loadDurationMs: 4000, promptEvalDurationMs: 100 } }],
+      });
+      await say('Hello');
+      await say('/cost');
+      assert.match(lastText(), /decode 60\.0 tokens\/s, end-to-end 5\.0 tokens\/s \(includes load and thinking\)/);
+      assert.match(lastText(), /avg load 4000 ms/);
+    });
+
     test('/cost says so when nothing is recorded', async () => {
       await say('/cost');
       assert.match(lastText(), /No model usage/);
@@ -804,6 +815,9 @@ describe('TelegramBotClient', () => {
       erroredCases: 0,
       totalLatencyMs: 4000,
       avgLatencyMs: 1000,
+      avgWarmLatencyMs: 700,
+      avgLoadMs: 300,
+      decodeTokensPerSec: 42,
       estimatedTokensPerSec: 42,
       tokensPerSecSource: 'backend',
       categories: { reasoning: { category: 'reasoning', passed: 3, total: 4, percentage: 75, avgLatencyMs: 1000 } },
@@ -825,7 +839,8 @@ describe('TelegramBotClient', () => {
       assert.equal(models.length, 1);
       assert.match(lastText(), /Benchmark of qwen3:8b/);
       assert.match(lastText(), /Score: 88% \(grade B\+\)/);
-      assert.match(lastText(), /42 tokens\/s \(backend\)/);
+      assert.match(lastText(), /42 decode tokens\/s/);
+      assert.match(lastText(), /average load 300 ms/);
     });
 
     test('refuses a model that is not installed instead of printing a failing grade', async () => {

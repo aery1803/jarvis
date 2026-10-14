@@ -8,6 +8,7 @@ import dotenv from 'dotenv';
 import path from 'node:path';
 import { loadExternalSettings } from './security/credentials.js';
 import { parseAllowedIps } from './web/access.js';
+import { parseThinkingMode, type ThinkingMode } from './services/thinking-control.js';
 
 dotenv.config();
 
@@ -39,8 +40,10 @@ const ConfigSchema = z.object({
   defaultModel: z.string().min(1).default('qwen3:8b'),
   /** Token budget handed to the context builder for a chat turn. */
   contextTokens: z.number().int().min(1).default(16_384),
-  /** Direct web search when SearXNG is unreachable; off unless the owner opts in. */
-  searchLiveFallback: z.boolean().default(false),
+  /** Direct DuckDuckGo search when SearXNG is unreachable. On by default; `JARVIS_SEARCH_LIVE_FALLBACK=0` turns it off. */
+  searchLiveFallback: z.boolean().default(true),
+  /** `off` sends `think:false` to the qwen3 family, `auto` leaves each model's default, `on` always thinks. */
+  thinkingMode: z.enum(['off', 'auto', 'on']).default('off'),
   /** Tier 2: pulling a missing model downloads gigabytes, so it is never implicit. */
   allowModelPull: z.boolean().default(false),
   mcpServers: z.array(z.any()).default([]),
@@ -78,6 +81,15 @@ function booleanSetting(key: string, fallback: boolean): boolean {
   if (['0', 'false', 'no', 'off'].includes(raw)) return false;
   process.emitWarning(`${key}="${raw}" is not a boolean; using ${fallback}.`);
   return fallback;
+}
+
+function resolveThinkingMode(): ThinkingMode {
+  const raw = readSetting('JARVIS_THINKING');
+  if (raw === undefined) return 'off';
+  const mode = parseThinkingMode(raw);
+  if (mode) return mode;
+  process.emitWarning(`JARVIS_THINKING="${raw}" is not off, auto or on; using off.`);
+  return 'off';
 }
 
 function listSetting(key: string): string[] {
@@ -143,7 +155,8 @@ export function loadConfig(overrides: Partial<JarvisConfig> = {}): JarvisConfig 
     searxngBaseUrl: readSetting('JARVIS_SEARXNG_URL') ?? 'http://127.0.0.1:8080',
     defaultModel: readSetting('JARVIS_DEFAULT_MODEL') ?? 'qwen3:8b',
     contextTokens: numberSetting('JARVIS_CONTEXT_TOKENS', 16_384, { integer: true, min: 1 }),
-    searchLiveFallback: booleanSetting('JARVIS_SEARCH_LIVE_FALLBACK', false),
+    searchLiveFallback: booleanSetting('JARVIS_SEARCH_LIVE_FALLBACK', true),
+    thinkingMode: resolveThinkingMode(),
     allowModelPull: booleanSetting('JARVIS_ALLOW_MODEL_PULL', false),
     mcpServers: resolveMcpServers(),
     webHost: readSetting('JARVIS_WEB_HOST') ?? '127.0.0.1',

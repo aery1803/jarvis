@@ -123,7 +123,7 @@ describe('SearXNGClient', () => {
     await assert.rejects(new SearXNGClient({ enableFallback: false, fetchImpl: impl }).search('x'), /ECONNREFUSED/);
   });
 
-  test('a bare client takes its live-fallback default from config.searchLiveFallback (off unless the owner enabled it)', async () => {
+  test('a bare client takes its live-fallback default from config.searchLiveFallback (on by default, off when the owner disables it)', async () => {
     const saved = config.searchLiveFallback;
     try {
       config.searchLiveFallback = false;

@@ -191,3 +191,102 @@ describe('ModelProvisioner dispatch', () => {
     assert.match(d.reason ?? '', /vision/);
   });
 });
+
+describe('ModelProvisioner: explicit model that is not installed', () => {
+  // The owner's real Ollama inventory. The qwen3.8:27b size is a 27B Q4 estimate (the box did not report one).
+  const REAL_INVENTORY = [
+    { name: 'qwen3:72b', size: 47415724625 },
+    { name: 'deepseek-r1:70b', size: 42520397873 },
+    { name: NEMOTRON_REGISTRY_ID, size: 30215578984 },
+    { name: 'qwen3:32b', size: 20201253829 },
+    { name: 'qwen3.8:27b', size: 17.4 * GIB },
+    { name: 'qwen3:14b', size: 9276198565 },
+    { name: 'qwen3:8b', size: 5225388164 },
+  ];
+
+  test('hello with an uninstalled explicit model is answered by the resident qwen3:8b, not a heavier lane', async () => {
+    const { provisioner, switched, pulled } = make(REAL_INVENTORY);
+    const d = await provisioner.ensureAndDispatch({ prompt: 'hello', explicitModel: 'qwen2.5:7b' });
+    assert.equal(d.canRun, true);
+    assert.equal(d.targetModel, 'qwen3:8b');
+    assert.equal(d.isFallback, true);
+    assert.equal(d.requestedModel, 'qwen2.5:7b');
+    assert.equal(d.wasInstalledOnDemand, false);
+    assert.deepEqual(switched, ['qwen3:8b']);
+    assert.deepEqual(pulled, [], 'nothing is downloaded without approval');
+    assert.match(d.rationale, /qwen2\.5:7b is not installed/);
+    assert.match(d.rationale, /answering instead/);
+    assert.match(d.rationale, /qwen3:8b/);
+    assert.match(d.rationale, /Tier 2 action that needs your approval/);
+    assert.ok(!/qwen3:14b|qwen3:32b|qwen3:72b/.test(d.rationale), 'no heavier lane is named as the answerer');
+  });
+
+  test('the prompt is not reclassified: an analytical prompt still stays on the default model', async () => {
+    const { provisioner } = make(REAL_INVENTORY);
+    for (const prompt of ['Analyze and compare these two strategies in depth', 'Write a python function', 'rigorous proof please']) {
+      const d = await provisioner.ensureAndDispatch({ prompt, explicitModel: 'qwen2.5:7b' });
+      assert.equal(d.targetModel, 'qwen3:8b', prompt);
+    }
+  });
+
+  test('a known but missing heavy model (qwen3:32b removed) also falls back to the default, not a lane-mate', async () => {
+    const { provisioner } = make(REAL_INVENTORY.filter((m) => m.name !== 'qwen3:32b'));
+    const d = await provisioner.ensureAndDispatch({ prompt: 'hello', explicitModel: 'qwen3:32b' });
+    assert.equal(d.targetModel, 'qwen3:8b');
+    assert.match(d.rationale, /qwen3:32b/);
+    assert.match(d.rationale, /not installed/);
+  });
+
+  test('with the default model missing, the smallest installed model that fits answers', async () => {
+    const { provisioner } = make(REAL_INVENTORY.filter((m) => m.name !== 'qwen3:8b'));
+    const d = await provisioner.ensureAndDispatch({ prompt: 'hello', explicitModel: 'qwen2.5:7b' });
+    assert.equal(d.targetModel, 'qwen3:14b');
+    assert.equal(d.isFallback, true);
+    assert.match(d.rationale, /smallest installed model that fits/);
+  });
+
+  test('a configured default other than qwen3:8b is honoured', async () => {
+    const provider = new MockLLMProvider();
+    const checker = new CapabilityChecker({ minHeadroomBytes: 1024 * 1024, env: {} });
+    checker.getFreeMemory = () => 14 * GIB;
+    checker.getTotalMemory = () => 31.65 * GIB;
+    const provisioner = new ModelProvisioner(provider, {
+      capabilityChecker: checker,
+      getVramFreeBytes: async () => 45 * GIB,
+      listInstalled: async () => REAL_INVENTORY,
+      defaultModel: 'qwen3:14b',
+    });
+    const d = await provisioner.ensureAndDispatch({ prompt: 'hello', explicitModel: 'qwen2.5:7b' });
+    assert.equal(d.targetModel, 'qwen3:14b');
+  });
+
+  test('canRun is false, with the Tier 2 explanation, when nothing installed fits', async () => {
+    const { provisioner, switched } = make(REAL_INVENTORY, 1);
+    const d = await provisioner.ensureAndDispatch({ prompt: 'hello', explicitModel: 'qwen2.5:7b' });
+    assert.equal(d.canRun, false);
+    assert.match(d.reason ?? '', /qwen2\.5:7b is not installed/);
+    assert.match(d.reason ?? '', /Tier 2/);
+    assert.deepEqual(switched, []);
+  });
+
+  test('an approved pull still wins: the owner asked for that model and said yes to downloading it', async () => {
+    const { provisioner, pulled } = make(REAL_INVENTORY.filter((m) => m.name !== 'qwen3:32b'));
+    const d = await provisioner.ensureAndDispatch({
+      prompt: 'hello',
+      explicitModel: 'qwen3:32b',
+      allowPull: true,
+      confirmPull: async () => true,
+    });
+    assert.deepEqual(pulled, ['qwen3:32b']);
+    assert.equal(d.targetModel, 'qwen3:32b');
+    assert.equal(d.wasInstalledOnDemand, true);
+  });
+
+  test('a declined pull falls back to the default and says the download was not approved', async () => {
+    const { provisioner, pulled } = make(REAL_INVENTORY.filter((m) => m.name !== 'qwen3:32b'));
+    const d = await provisioner.ensureAndDispatch({ prompt: 'hello', explicitModel: 'qwen3:32b', allowPull: true, confirmPull: async () => false });
+    assert.deepEqual(pulled, []);
+    assert.equal(d.targetModel, 'qwen3:8b');
+    assert.match(d.rationale, /not approved/);
+  });
+});

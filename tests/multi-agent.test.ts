@@ -97,6 +97,39 @@ describe('MultiAgentOrchestrator & Taint Tracking', () => {
     assert.equal(res.sources, undefined);
   });
 
+  test('researcher names DuckDuckGo live search when it answered because SearXNG was down', async () => {
+    const search = fakeSearch({ ...goodOutcome, source: 'duckduckgo-live', searxngError: 'ECONNREFUSED' });
+    const res = await new MultiAgentOrchestrator({ search, distill: fakeDistill }).executeTask({
+      id: 'ddg', assignedRole: 'researcher', goal: 'Z13 memory', inputPayload: {}, isTainted: false,
+    });
+    assert.equal(res.status, 'success');
+    assert.match(res.output, /DuckDuckGo live search \(SearXNG unreachable; only the query was sent\)/);
+  });
+
+  test('agent model calls send think:false to qwen3 and write the backend timings to the ledger', async () => {
+    const calls: GenerateOptions[] = [];
+    const provider: LLMProvider = {
+      getModel: () => 'qwen3:8b',
+      getBaseUrl: () => 'http://fake',
+      chat: async () => '',
+      generate: async (_prompt: string, options: GenerateOptions = {}) => {
+        calls.push(options);
+        options.onUsage?.({ model: 'qwen3:8b', promptTokens: 50, completionTokens: 90, evalDurationMs: 3000, loadDurationMs: 7000, promptEvalDurationMs: 200, doneReason: 'stop' });
+        return 'A short plan.';
+      },
+    };
+    const orchestrator = new MultiAgentOrchestrator({ llmProvider: provider, ledger });
+    await orchestrator.executeTask({ id: 'plan-1', assignedRole: 'planner', goal: 'Plan a small thing', inputPayload: {}, isTainted: false });
+    assert.equal(calls[0].think, false);
+    const [row] = await ledger.listRecent();
+    assert.equal(row.decodeTokensPerSec, 30);
+    assert.equal(row.loadMs, 7000);
+
+    const thinking = new MultiAgentOrchestrator({ llmProvider: provider, thinkingMode: 'on' });
+    await thinking.executeTask({ id: 'plan-2', assignedRole: 'planner', goal: 'Plan a small thing', inputPayload: {}, isTainted: false });
+    assert.equal(calls[1].think, true);
+  });
+
   test('verifier measures agreement over the sources and stays tainted', async () => {
     const orchestrator = new MultiAgentOrchestrator({ search: fakeSearch(), distill: fakeDistill });
     const r = await orchestrator.executeTask({ id: 'r', assignedRole: 'researcher', goal: 'Z13 memory', inputPayload: {}, isTainted: false });

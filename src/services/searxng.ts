@@ -31,7 +31,7 @@ export interface SearXNGClientOptions {
   enableFallback?: boolean;
   /**
    * Allows the live DuckDuckGo fallback, which sends the query text to html.duckduckgo.com.
-   * Defaults to the owner's `config.searchLiveFallback` (`JARVIS_SEARCH_LIVE_FALLBACK`, off unless set).
+   * Defaults to the owner's `config.searchLiveFallback` (`JARVIS_SEARCH_LIVE_FALLBACK`, on unless set to 0).
    */
   enableLiveFallback?: boolean;
   /** Injectable for tests. */

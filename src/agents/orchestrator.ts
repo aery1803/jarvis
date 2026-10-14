@@ -17,6 +17,7 @@ import { ConsensusEngine } from '../services/consensus.js';
 import type { ClaimEvaluation } from '../services/consensus.js';
 import { CognitionEngine, fenceUntrusted } from './cognition.js';
 import { logger } from '../utils/logger.js';
+import { resolveThink, type ThinkingMode } from '../services/thinking-control.js';
 
 const DEFAULT_BUDGET: AgentBudget = {
   maxSteps: 8,
@@ -56,6 +57,8 @@ export interface OrchestratorDeps {
   /** Ledger lane label for LLM calls. */
   lane?: string;
   defaultBudget?: Partial<AgentBudget>;
+  /** Thinking control for agent calls (default `off`: a hidden reasoning block would eat the per-call token budget). */
+  thinkingMode?: ThinkingMode;
 }
 
 export interface PipelineOptions {
@@ -184,6 +187,7 @@ export class MultiAgentOrchestrator {
   private consensus: ConsensusPort;
   private health: HealthPort | undefined;
   private lane: string;
+  private thinkingMode: ThinkingMode;
   private defaultBudget: AgentBudget;
 
   /**
@@ -199,6 +203,7 @@ export class MultiAgentOrchestrator {
     this.consensus = deps.consensus ?? new ConsensusEngine();
     this.health = deps.health;
     this.lane = deps.lane ?? 'balanced';
+    this.thinkingMode = deps.thinkingMode ?? 'off';
     this.defaultBudget = { ...DEFAULT_BUDGET, ...deps.defaultBudget };
   }
 
@@ -332,6 +337,7 @@ export class MultiAgentOrchestrator {
       temperature: 0.2,
       maxTokens: completionCap,
       contextTokens: Math.max(4096, promptEstimate + completionCap + 512),
+      think: resolveThink(this.thinkingMode, provider.getModel()),
       signal: run.signal,
       onUsage: (u) => {
         reported.push(u);
@@ -356,6 +362,10 @@ export class MultiAgentOrchestrator {
           promptTokens,
           completionTokens,
           latencyMs,
+          ...(usage?.loadDurationMs !== undefined ? { loadMs: usage.loadDurationMs } : {}),
+          ...(usage?.promptEvalDurationMs !== undefined ? { promptEvalMs: usage.promptEvalDurationMs } : {}),
+          ...(usage?.evalDurationMs !== undefined ? { decodeMs: usage.evalDurationMs } : {}),
+          ...(usage?.doneReason ? { doneReason: usage.doneReason } : {}),
         });
       } catch (err: unknown) {
         logger.warn(`[MultiAgentOrchestrator] Ledger write failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -404,7 +414,7 @@ export class MultiAgentOrchestrator {
 
     result.sources = sources;
     const pageCount = sources.filter((s) => s.origin === 'page').length;
-    return `[Researcher] ${sources.length} source(s) for "${query}" via ${outcome.source} (${pageCount} full page, ${sources.length - pageCount} snippet only). Untrusted data.\n\n${formatSources(sources)}`;
+    return `[Researcher] ${sources.length} source(s) for "${query}" via ${outcome.source === 'duckduckgo-live' ? 'DuckDuckGo live search (SearXNG unreachable; only the query was sent)' : outcome.source} (${pageCount} full page, ${sources.length - pageCount} snippet only). Untrusted data.\n\n${formatSources(sources)}`;
   }
 
   private async runVerifier(request: AgentTaskRequest, run: TaskRun, result: Partial<AgentTaskResponse>): Promise<string> {

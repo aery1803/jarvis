@@ -175,7 +175,8 @@ Every setting is read from the environment first, then from `%USERPROFILE%\.jarv
 | `JARVIS_DEFAULT_MODEL` | `qwen3:8b` | Resident baseline model used when a request names none |
 | `JARVIS_OLLAMA_URL` | `http://127.0.0.1:11434` | Ollama endpoint |
 | `JARVIS_SEARXNG_URL` | `http://127.0.0.1:8080` | SearXNG endpoint |
-| `JARVIS_SEARCH_LIVE_FALLBACK` | `false` | Allow a direct DuckDuckGo search (the query leaves your machine) when SearXNG is down |
+| `JARVIS_SEARCH_LIVE_FALLBACK` | `true` | Search DuckDuckGo directly when SearXNG is down (privacy trade-off: only the query text leaves your machine, and the reply says which engine answered); set `0` to turn it off |
+| `JARVIS_THINKING` | `off` | Reasoning control: `off` sends `think:false` to the qwen3 family (reasoning tasks and deepseek-r1/Nemotron keep their own default), `auto` leaves every model's default, `on` always thinks |
 | `JARVIS_ALLOW_MODEL_PULL` | `false` | Allow model downloads (Tier 2: each one still needs your approval) |
 | `JARVIS_CONTEXT_TOKENS` | `16384` | Token budget for a chat turn |
 | `JARVIS_MIN_HOST_FREE_GB` | min(14, 25% of host RAM) | Minimum free host RAM before a model loads; model weights themselves are budgeted against the GPU pool |

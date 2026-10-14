@@ -107,6 +107,27 @@ describe('runChatTurn', () => {
       assert.ok(rows[0].lane.length > 0);
     });
 
+    test('qwen3 gets think:false by default and the backend timings reach the ledger', async () => {
+      await harness.cleanup();
+      await start([
+        {
+          chunks: ['OK'],
+          doneReason: 'stop',
+          usage: { promptTokens: 20, completionTokens: 120, totalDurationMs: 19_500, evalDurationMs: 4_000, loadDurationMs: 12_000, promptEvalDurationMs: 500 },
+        },
+      ]);
+      const sessionId = await newSession(harness.rt);
+      await runChatTurn(harness.rt, input(sessionId, 'Reply with only the word OK.'), collectEvents().onEvent);
+      assert.equal(provider.calls[0].options.think, false);
+      const [row] = await harness.rt.ledger.listRecent();
+      assert.equal(row.loadMs, 12_000);
+      assert.equal(row.promptEvalMs, 500);
+      assert.equal(row.decodeMs, 4_000);
+      assert.equal(row.decodeTokensPerSec, 30);
+      assert.equal(row.tokensPerSec, 6.15);
+      assert.equal(row.doneReason, 'stop');
+    });
+
     test('an event consumer that throws does not break the turn', async () => {
       const sessionId = await newSession(harness.rt);
       const result = await runChatTurn(harness.rt, input(sessionId, 'Say hello'), () => {
@@ -233,6 +254,43 @@ describe('runChatTurn', () => {
       const result = await runChatTurn(harness.rt, input(sessionId, 'Hello', { explicitModel: 'qwen3:32b' }), onEvent);
       assert.equal(result.model, 'qwen3:8b');
       assert.match(ofType(events, 'model')[0].rationale, /not installed/);
+    });
+
+    test('the real 7-model inventory: an uninstalled explicit model answers "hello" on qwen3:8b with a plain explanation', async () => {
+      await start([{ chunks: ['Hello!'] }], {
+        installed: ['qwen3:72b', 'deepseek-r1:70b', 'rnogy/Nvidia_Llama-3_3-Nemotron-Super-49B-v1_5:q4_K_M', 'qwen3:32b', 'qwen3.8:27b', 'qwen3:14b', 'qwen3:8b'],
+        vramFreeBytes: 45 * GIB,
+      });
+      const sessionId = await newSession(harness.rt);
+      const { events, onEvent } = collectEvents();
+      const result = await runChatTurn(harness.rt, input(sessionId, 'hello', { explicitModel: 'qwen2.5:7b' }), onEvent);
+      assert.equal(result.model, 'qwen3:8b');
+      assert.equal(provider.calls[0].model, 'qwen3:8b');
+      const [modelEvent] = ofType(events, 'model');
+      assert.equal(modelEvent.model, 'qwen3:8b');
+      assert.match(modelEvent.rationale, /Requested model qwen2\.5:7b is not installed/);
+      assert.match(modelEvent.rationale, /qwen3:8b is answering instead/);
+      assert.match(modelEvent.rationale, /Tier 2 action that needs your approval/);
+    });
+
+    test('thinking mode: qwen3 chat gets think:false, an analytical prompt keeps the default, mode on and auto follow the setting', async () => {
+      await start([{ chunks: ['ok'] }], { installed: ['qwen3:8b', 'qwen3:14b'] });
+      const sessionId = await newSession(harness.rt);
+      await runChatTurn(harness.rt, input(sessionId, 'hello there'), collectEvents().onEvent);
+      assert.equal(provider.calls.at(-1)?.options.think, false);
+      await runChatTurn(harness.rt, input(sessionId, 'Analyze the tradeoffs of these two designs'), collectEvents().onEvent);
+      assert.equal(provider.calls.at(-1)?.model, 'qwen3:14b');
+      assert.equal(provider.calls.at(-1)?.options.think, undefined, 'a genuinely reasoning task keeps the model default');
+
+      await harness.cleanup();
+      await start([{ chunks: ['ok'] }], { config: { thinkingMode: 'on' } });
+      await runChatTurn(harness.rt, input(await newSession(harness.rt), 'hello there'), collectEvents().onEvent);
+      assert.equal(provider.calls.at(-1)?.options.think, true);
+
+      await harness.cleanup();
+      await start([{ chunks: ['ok'] }], { config: { thinkingMode: 'auto' } });
+      await runChatTurn(harness.rt, input(await newSession(harness.rt), 'hello there'), collectEvents().onEvent);
+      assert.equal(provider.calls.at(-1)?.options.think, undefined);
     });
 
     test('Ollama unreachable with no known inventory is reported, not guessed around', async () => {
@@ -515,6 +573,27 @@ describe('runChatTurn', () => {
       const saved = await harness.rt.memory.searchKnowledge(OWNER, 'Node release');
       assert.ok(saved.length >= 1);
       assert.equal(saved[0].untrusted, true);
+    });
+
+    test('when SearXNG is down and DuckDuckGo answers, the status says which engine answered', async () => {
+      await start([{ chunks: ['Node 26 is current [Source 1].'] }], {
+        search: { searchDetailed: async () => ({ ...searchOk(['https://a.example/node']), source: 'duckduckgo-live' as const, searxngError: 'ECONNREFUSED' }) },
+        distiller: { fetchTopResults: async (results) => [page(results[0].url, 'Node 26 is the current release line.', 'page')] },
+      });
+      const { events, onEvent } = collectEvents();
+      const result = await runChatTurn(harness.rt, input(await newSession(harness.rt), 'What is the latest Node release?'), onEvent);
+      assert.equal(result.ok, true);
+      assert.ok(ofType(events, 'status').some((e) => e.text === 'SearXNG unreachable; used DuckDuckGo live search (only your query was sent).'));
+    });
+
+    test('SearXNG answering produces no live-search notice', async () => {
+      await start([{ chunks: ['ok'] }], {
+        search: { searchDetailed: async () => searchOk(['https://a.example/node']) },
+        distiller: { fetchTopResults: async (results) => [page(results[0].url, 'Node 26 is the current release line.', 'page')] },
+      });
+      const { events, onEvent } = collectEvents();
+      await runChatTurn(harness.rt, input(await newSession(harness.rt), 'What is the latest Node release?'), onEvent);
+      assert.ok(!ofType(events, 'status').some((e) => /DuckDuckGo/.test(e.text)));
     });
 
     test('an explicit useResearch=false skips research even for a lookup-looking prompt', async () => {

@@ -5,6 +5,7 @@
 
 import type { GenerationUsage, LLMProvider } from '../services/provider.js';
 import { CognitionEngine } from '../agents/cognition.js';
+import { resolveThink, type ThinkingMode } from '../services/thinking-control.js';
 import { findToolCall, isPromptEcho, isRefusal, stripThinking } from './answer-check.js';
 import os from 'node:os';
 
@@ -33,8 +34,12 @@ export interface BenchmarkCaseResult {
   notes?: string;
   promptTokens?: number;
   completionTokens?: number;
-  /** Backend-reported decode time, when available. */
+  /** Backend-reported decode time (`eval_duration`), when available. */
   evalDurationMs?: number;
+  /** Backend-reported model load time (`load_duration`); large only on the call that loaded the model. */
+  loadMs?: number;
+  /** Backend-reported prompt evaluation time (`prompt_eval_duration`). */
+  promptEvalMs?: number;
 }
 
 export interface CategorySummary {
@@ -55,7 +60,8 @@ export type BenchmarkGrade = 'A+' | 'A' | 'B+' | 'B' | 'C' | 'F' | 'ERROR' | 'IN
  */
 export type BenchmarkStatus = 'complete' | 'partial' | 'error' | 'aborted';
 
-export type TokensPerSecSource = 'backend' | 'wall-clock' | 'estimated' | 'none';
+/** `backend`: computed from Ollama's own counters. `none`: the backend reported none, so no speed is claimed. */
+export type TokensPerSecSource = 'backend' | 'none';
 
 export interface ModelBenchmarkScorecard {
   modelName: string;
@@ -68,8 +74,15 @@ export interface ModelBenchmarkScorecard {
   answeredCases: number;
   erroredCases: number;
   totalLatencyMs: number;
+  /** End-to-end mean per case, including model load, prompt evaluation and any thinking. */
   avgLatencyMs: number;
-  /** Decode speed. Kept under its original name: it is the backend-measured value when `tokensPerSecSource` is `backend`. */
+  /** Mean per case with the backend-reported load time taken out, so the first call's model load does not count. */
+  avgWarmLatencyMs: number;
+  /** Mean `load_duration` over cases that reported one; 0 when none did. */
+  avgLoadMs: number;
+  /** Decode speed: total completion tokens / total `eval_duration` (excludes load and prompt evaluation). 0 when `tokensPerSecSource` is `none`. */
+  decodeTokensPerSec: number;
+  /** Same value as `decodeTokensPerSec`, kept under its original name for older readers. */
   estimatedTokensPerSec: number;
   tokensPerSecSource: TokensPerSecSource;
   categories: Record<string, CategorySummary>;
@@ -92,6 +105,11 @@ export interface BenchmarkRunOptions {
   /** Per-case request timeout (default 120000). */
   caseTimeoutMs?: number;
   onProgress?: (completed: number, total: number, result: BenchmarkCaseResult) => void;
+}
+
+export interface ModelBenchmarkSuiteOptions {
+  /** Default `off`: qwen3 would otherwise spend the completion cap on a hidden reasoning block and score the cap, not the model. */
+  thinkingMode?: ThinkingMode;
 }
 
 export class BenchmarkBusyError extends Error {
@@ -184,8 +202,10 @@ function gradeFor(score: number): BenchmarkGrade {
 
 export class ModelBenchmarkSuite {
   private testCases: BenchmarkCase[] = [];
+  private thinkingMode: ThinkingMode;
 
-  constructor() {
+  constructor(options: ModelBenchmarkSuiteOptions = {}) {
+    this.thinkingMode = options.thinkingMode ?? 'off';
     this.initStandardCases();
   }
 
@@ -321,9 +341,9 @@ export class ModelBenchmarkSuite {
     const results: BenchmarkCaseResult[] = [];
     const modelName = provider.getModel();
     let totalLatency = 0;
-    let estimatedWordsTokens = 0;
     let aborted = false;
 
+    const think = resolveThink(this.thinkingMode, modelName);
     for (const tc of this.testCases) {
       if (options.signal?.aborted) {
         aborted = true;
@@ -339,7 +359,9 @@ export class ModelBenchmarkSuite {
         });
         const response = await provider.generate(promptToSend, {
           temperature: 0.2,
-          maxTokens: options.maxTokens ?? 768,
+          // A model left to think needs room to finish its reasoning before the visible answer starts.
+          maxTokens: options.maxTokens ?? (think === false ? 768 : 2048),
+          think,
           contextTokens: options.contextTokens ?? 4096,
           signal: options.signal,
           timeoutMs: options.caseTimeoutMs ?? 120_000,
@@ -352,7 +374,6 @@ export class ModelBenchmarkSuite {
         totalLatency += latencyMs;
 
         const output = stripThinking(coerceOutput(response));
-        estimatedWordsTokens += Math.round(output.trim().split(/\s+/).length * 1.3);
 
         const judged = judgeAnswer(tc, output);
         const passed = judged.passed;
@@ -369,6 +390,8 @@ export class ModelBenchmarkSuite {
           promptTokens: usage?.promptTokens,
           completionTokens: usage?.completionTokens,
           evalDurationMs: usage?.evalDurationMs,
+          loadMs: usage?.loadDurationMs,
+          promptEvalMs: usage?.promptEvalDurationMs,
         };
       } catch (err: unknown) {
         if (options.signal?.aborted) {
@@ -436,7 +459,6 @@ export class ModelBenchmarkSuite {
     const grade: BenchmarkGrade = status === 'error' ? 'ERROR' : status === 'complete' ? gradeFor(overallScore) : 'INCOMPLETE';
 
     const withBackend = answered.filter((r) => r.completionTokens !== undefined && r.evalDurationMs !== undefined && r.evalDurationMs > 0);
-    const withTokens = answered.filter((r) => r.completionTokens !== undefined && r.latencyMs > 0);
     let tokensPerSec = 0;
     let tokensPerSecSource: TokensPerSecSource = 'none';
     if (withBackend.length > 0) {
@@ -444,15 +466,11 @@ export class ModelBenchmarkSuite {
       const seconds = withBackend.reduce((a, r) => a + (r.evalDurationMs ?? 0), 0) / 1000;
       tokensPerSec = Math.round((tokens / seconds) * 10) / 10;
       tokensPerSecSource = 'backend';
-    } else if (withTokens.length > 0) {
-      const tokens = withTokens.reduce((a, r) => a + (r.completionTokens ?? 0), 0);
-      const seconds = withTokens.reduce((a, r) => a + r.latencyMs, 0) / 1000;
-      tokensPerSec = Math.round((tokens / seconds) * 10) / 10;
-      tokensPerSecSource = 'wall-clock';
-    } else if (answered.length > 0 && totalLatency > 0) {
-      tokensPerSec = Math.round((estimatedWordsTokens / (totalLatency / 1000)) * 10) / 10;
-      tokensPerSecSource = 'estimated';
     }
+
+    const loaded = results.filter((r) => r.loadMs !== undefined);
+    const avgLoadMs = loaded.length > 0 ? Math.round(loaded.reduce((a, r) => a + (r.loadMs ?? 0), 0) / loaded.length) : 0;
+    const warmLatencyTotal = results.reduce((a, r) => a + Math.max(0, r.latencyMs - (r.loadMs ?? 0)), 0);
 
     // Determine recommended lanes
     const recommendedLanes: string[] = [];
@@ -476,6 +494,9 @@ export class ModelBenchmarkSuite {
       erroredCases: errored.length,
       totalLatencyMs: totalLatency,
       avgLatencyMs: results.length > 0 ? Math.round(totalLatency / results.length) : 0,
+      avgWarmLatencyMs: results.length > 0 ? Math.round(warmLatencyTotal / results.length) : 0,
+      avgLoadMs,
+      decodeTokensPerSec: tokensPerSec,
       estimatedTokensPerSec: tokensPerSec,
       tokensPerSecSource,
       categories,
@@ -499,14 +520,14 @@ export class ModelBenchmarkSuite {
       .map((c) => (c.total === 0 ? `- *${c.category.toUpperCase()}*: no answers` : `- *${c.category.toUpperCase()}*: ${c.percentage}% (${c.passed}/${c.total}) | Avg: ${c.avgLatencyMs}ms`))
       .join('\n');
 
-    const speed = card.tokensPerSecSource === 'none' ? 'n/a' : `${card.estimatedTokensPerSec} tokens/sec (${card.tokensPerSecSource})`;
+    const speed = card.tokensPerSecSource === 'none' ? 'decode speed n/a (the backend reported no timings)' : `${card.decodeTokensPerSec} decode tokens/sec`;
     return [
       `📊 *Jarvis Model Intelligence Benchmark*`,
       `══════════════════════════════════════`,
       `*Model:* \`${card.modelName}\``,
       `*Overall Intelligence Score:* **${card.overallScore}%** (Grade: **${card.grade}**)`,
       ...(card.status !== 'complete' ? [`*Note:* ${card.status.toUpperCase()} - ${card.error ?? ''}`] : []),
-      `*Throughput:* ${speed} | Avg Latency: ${card.avgLatencyMs}ms`,
+      `*Throughput:* ${speed} | Avg Latency: ${card.avgLatencyMs}ms (${card.avgWarmLatencyMs}ms without model load) | Avg Load: ${card.avgLoadMs}ms`,
       `*Host Memory:* ${card.systemSpecs.freeMemoryGB} GB free / ${card.systemSpecs.totalMemoryGB} GB total`,
       ``,
       `*Category Breakdown:*`,
@@ -536,8 +557,9 @@ export class ModelBenchmarkSuite {
       ` Model Tested     : ${card.modelName}`,
       ` Overall Score    : ${card.overallScore}% [Grade: ${card.grade}]`,
       ...(card.status !== 'complete' ? [` Status           : ${card.status.toUpperCase()} - ${card.error ?? ''}`] : []),
-      ` Throughput       : ${card.tokensPerSecSource === 'none' ? 'n/a' : `${card.estimatedTokensPerSec} tokens/sec (${card.tokensPerSecSource})`}`,
-      ` Average Latency  : ${card.avgLatencyMs} ms`,
+      ` Decode Speed     : ${card.tokensPerSecSource === 'none' ? 'n/a (the backend reported no timings)' : `${card.decodeTokensPerSec} tokens/sec`}`,
+      ` Average Latency  : ${card.avgLatencyMs} ms (${card.avgWarmLatencyMs} ms without model load)`,
+      ` Average Load     : ${card.avgLoadMs} ms`,
       ` Memory Headroom  : ${card.systemSpecs.freeMemoryGB} GB free / ${card.systemSpecs.totalMemoryGB} GB total`,
       '--------------------------------------------------------------',
       ' Category Breakdown:',

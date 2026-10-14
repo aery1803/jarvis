@@ -10,6 +10,7 @@ import { z } from 'zod';
 import type { SkillManifest } from '../../skills/types.js';
 import { HttpError, refuseIfKilled, type Route, type RouteContext } from './types.js';
 import { cleanModelText, withInstalledModel } from './llm.js';
+import { resolveThink } from '../../services/thinking-control.js';
 import type { ApprovalFlow } from './approval-flow.js';
 import { approvalArgsMetadata, formatApprovalAction } from '../../security/approval-text.js';
 
@@ -129,10 +130,11 @@ export function createSkillRoutes(flow: ApprovalFlow): Route[] {
         rt.providerFor(model).generate(skillPrompt(description), {
           temperature: 0.2,
           maxTokens: 1500,
+          think: resolveThink(rt.config.thinkingMode, model, 'code'),
           signal: stop.signal,
           onUsage: (usage) => {
             void rt.ledger
-              .recordUsage({ model: usage.model || model, lane: 'skills', promptTokens: usage.promptTokens, completionTokens: usage.completionTokens, latencyMs: usage.totalDurationMs ?? Date.now() - startedAt })
+              .recordUsage({ model: usage.model || model, lane: 'skills', promptTokens: usage.promptTokens, completionTokens: usage.completionTokens, latencyMs: usage.totalDurationMs ?? Date.now() - startedAt, loadMs: usage.loadDurationMs, promptEvalMs: usage.promptEvalDurationMs, decodeMs: usage.evalDurationMs, doneReason: usage.doneReason })
               .catch(() => undefined);
           },
         })

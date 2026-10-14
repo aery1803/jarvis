@@ -49,6 +49,8 @@ export interface GenerateOptions {
   signal?: AbortSignal;
   /** Overall request timeout for non-streaming calls; for streams it is applied to the whole generation when set. */
   timeoutMs?: number;
+  /** Ollama's top-level `think` switch. Left out of the request when undefined, so the model keeps its own default. */
+  think?: boolean;
   /** Called once, with the backend's real counts, when a generation completes. Not called for failed or aborted calls. */
   onUsage?: (usage: GenerationUsage) => void;
 }
@@ -89,6 +91,16 @@ function resolveContextTokens(requested: number | undefined, fallback: number): 
   if (!Number.isFinite(value)) return fallback;
   return Math.max(MIN_CONTEXT_TOKENS, Math.floor(value));
 }
+
+/** Tags Ollama has answered "does not support thinking" for; shared by every provider instance because they are created per call. */
+const thinkUnsupportedModels = new Set<string>();
+
+/** Forgets which models rejected `think`. Only tests and a model re-pull need it. */
+export function resetThinkingSupportCache(): void {
+  thinkUnsupportedModels.clear();
+}
+
+const THINK_REJECTED = /does not support thinking|doesn't support thinking|thinking is not supported/i;
 
 function nsToMs(ns: number | undefined): number | undefined {
   return ns === undefined ? undefined : Math.round(ns / 1e6);
@@ -272,6 +284,30 @@ export class OllamaProvider implements LLMProvider {
     };
   }
 
+  /**
+   * POSTs to Ollama with the top-level `think` field only when defined. Ollama answers HTTP 400 "does not support
+   * thinking" for models without a thinking mode; that is retried once without the field and remembered per model tag.
+   */
+  private async post(path: string, body: Record<string, unknown>, think: boolean | undefined, signal: AbortSignal | undefined): Promise<Response> {
+    const send = (withThink: boolean | undefined): Promise<Response> =>
+      fetch(`${this.baseUrl}${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal,
+        body: JSON.stringify(withThink === undefined ? body : { ...body, think: withThink }),
+      });
+    const effective = thinkUnsupportedModels.has(this.model) ? undefined : think;
+    const response = await send(effective);
+    if (response.status !== 400 || effective === undefined) return response;
+    const detail = await response.text().catch(() => '');
+    if (!THINK_REJECTED.test(detail)) {
+      return new Response(detail, { status: response.status, statusText: response.statusText });
+    }
+    thinkUnsupportedModels.add(this.model);
+    logger.info(`[OllamaProvider] ${this.model} does not support thinking; retrying without the think field.`);
+    return send(undefined);
+  }
+
   public async generate(prompt: string, options: GenerateStreamOptions = {}): Promise<string> {
     try {
       let text = '';
@@ -291,17 +327,12 @@ export class OllamaProvider implements LLMProvider {
    * token counts, which are handed to `options.onUsage`.
    */
   public async *generateStream(prompt: string, options: GenerateStreamOptions = {}): AsyncGenerator<string, void, undefined> {
-    const response = await fetch(`${this.baseUrl}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal: combineSignals(options.signal, options.timeoutMs),
-      body: JSON.stringify({
-        model: this.model,
-        prompt,
-        stream: true,
-        options: this.buildOptions(options),
-      }),
-    });
+    const response = await this.post(
+      '/api/generate',
+      { model: this.model, prompt, stream: true, options: this.buildOptions(options) },
+      options.think,
+      combineSignals(options.signal, options.timeoutMs)
+    );
 
     if (!response.ok) {
       throw new Error(`Ollama error ${response.status}: ${response.statusText}`);
@@ -337,17 +368,12 @@ export class OllamaProvider implements LLMProvider {
 
   public async chat(messages: ChatMessage[], options: GenerateOptions = {}): Promise<string> {
     try {
-      const response = await fetch(`${this.baseUrl}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: combineSignals(options.signal, options.timeoutMs ?? DEFAULT_CHAT_TIMEOUT_MS),
-        body: JSON.stringify({
-          model: this.model,
-          messages,
-          stream: false,
-          options: this.buildOptions(options),
-        }),
-      });
+      const response = await this.post(
+        '/api/chat',
+        { model: this.model, messages, stream: false, options: this.buildOptions(options) },
+        options.think,
+        combineSignals(options.signal, options.timeoutMs ?? DEFAULT_CHAT_TIMEOUT_MS)
+      );
 
       if (!response.ok) {
         throw new Error(`Ollama chat error ${response.status}: ${response.statusText}`);

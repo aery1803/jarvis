@@ -5,11 +5,14 @@
  * Rules:
  * 1. Default baseline: the resident qwen3:8b, which has complete access to memory, tools and system stats.
  * 2. Precision escalation: heavy engineering, proofs and architecture escalate to the 30B+ installed models.
- * 3. Only installed models are chosen. Downloading a multi-GB model is Tier 2 (CODING_RULES section 5): it
+ * 3. An explicitly requested model that is not installed is never swapped for a heavier lane: the resident default
+ *    answers (or the smallest installed model that fits) and the rationale says the requested one is missing.
+ * 4. Only installed models are chosen. Downloading a multi-GB model is Tier 2 (CODING_RULES section 5): it
  *    happens only when the caller opts in with `allowPull` and `confirmPull` answers yes for that model.
  */
 
 import type { LLMProvider } from '../services/provider.js';
+import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 import { CapabilityChecker } from './capability.js';
 import { MemoryGovernor } from './governor.js';
@@ -72,6 +75,8 @@ export interface ProvisionerOptions {
   getVramFreeBytes?: () => Promise<number | null>;
   /** Installed models with sizes. Defaults to names from `provider.listModels()`, which carry no sizes. */
   listInstalled?: () => Promise<InstalledModelInfo[]>;
+  /** Resident model answering when the owner's explicit model is not installed. Defaults to `config.defaultModel`. */
+  defaultModel?: string;
 }
 
 const KIMI_WORDS = /\b(kimi|linear attention|1m context|million tokens|massive document|book analysis)\b/i;
@@ -245,6 +250,69 @@ export class ModelProvisioner {
   }
 
   /**
+   * The owner named a model that is not installed. Re-routing would pick a lane-mate (often a heavier model with a
+   * long cold load), so the resident default answers instead, or the smallest installed model that fits.
+   */
+  private fallbackForMissingExplicit(requested: string, classification: Classification, notes: string[]): ProvisionDecision {
+    const defaultId = this.options.defaultModel ?? config.defaultModel;
+    const defaultDef = this.registry.getModel(defaultId);
+    let chosen: ModelDefinition | null = null;
+    let why = '';
+    let fitNote = '';
+    const tryFit = (model: ModelDefinition): boolean => {
+      const check = this.governor.canFit(model);
+      fitNote = check.canRun && (check.evicts !== undefined || check.alreadyResident) ? (check.note ?? '') : '';
+      return check.canRun;
+    };
+
+    if (defaultDef && this.registry.isInstalled(defaultDef.id) && tryFit(defaultDef)) {
+      chosen = defaultDef;
+      why = 'the configured default resident model';
+    } else {
+      const isUsableForChat = (m: ModelDefinition): boolean =>
+        ![m.lane, ...(m.lanes ?? [])].some((lane) => lane === 'embedding' || lane === 'vision');
+      const smallestFirst = this.registry
+        .listInstalled()
+        .filter(isUsableForChat)
+        .sort((a, b) => a.memoryRequirementBytes - b.memoryRequirementBytes);
+      chosen = smallestFirst.find(tryFit) ?? null;
+      why = `the smallest installed model that fits (the default ${defaultId} is not installed or does not fit)`;
+    }
+
+    if (!chosen) {
+      return this.unavailable(
+        classification,
+        `${requested} is not installed, and no installed model fits the current memory headroom. Pulling ${requested} is a Tier 2 action that needs your approval.`,
+        requested
+      );
+    }
+
+    const targetModel = this.registry.getInstalledTag(chosen.id) ?? chosen.id;
+    this.provider.setModel?.(targetModel);
+    const rationale = [
+      `Requested model ${requested} is not installed.`,
+      ...notes.filter((note) => !note.includes('downloading is a Tier 2 action')),
+      `${targetModel} is answering instead (${why}).`,
+      fitNote,
+      `Pulling ${requested} is a Tier 2 action that needs your approval.`,
+    ]
+      .filter(Boolean)
+      .join(' ');
+
+    return {
+      targetModel,
+      category: categoryFor(chosen.lane),
+      is30BClass: (parseParameterBillions(chosen.parameterSize) ?? 0) >= 30,
+      wasInstalledOnDemand: false,
+      rationale,
+      lane: chosen.lane,
+      isFallback: true,
+      canRun: true,
+      requestedModel: requested,
+    };
+  }
+
+  /**
    * Resolves the target model among INSTALLED models and points the provider at it. Never downloads without
    * `allowPull` plus an affirmative `confirmPull`; otherwise it falls back to the best installed model that fits
    * and says so in `rationale`.
@@ -313,6 +381,10 @@ export class ModelProvisioner {
       } else {
         notes.push(`${wanted} (${sizeLabel}) is not installed; downloading is a Tier 2 action that needs your approval, so an installed model is used instead.`);
       }
+    }
+
+    if (request.explicitModel && this.registry.hasInstalledInfo() && !this.registry.isInstalled(wanted)) {
+      return this.fallbackForMissingExplicit(request.explicitModel, classification, notes);
     }
 
     const route = await this.router.route({

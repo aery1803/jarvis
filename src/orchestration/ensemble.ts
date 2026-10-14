@@ -8,6 +8,7 @@ import { type LLMProvider, OllamaProvider } from '../services/provider.js';
 import { CognitionEngine, type CognitionOptions } from '../agents/cognition.js';
 import { ConsensusEngine } from '../services/consensus.js';
 import { config } from '../config.js';
+import { resolveThink } from '../services/thinking-control.js';
 import { logger } from '../utils/logger.js';
 import { probeOllama } from '../web/diagnostics.js';
 import { CapabilityChecker } from './capability.js';
@@ -154,7 +155,7 @@ export class MultiModelEnsemble {
         const provider = this.options.providerFactory
           ? this.options.providerFactory(tag)
           : new OllamaProvider({ baseUrl: config.ollamaBaseUrl, model: tag });
-        const answer = await this.governor.withLease(def, () => provider.generate(fullPrompt, { maxTokens: options.maxTokens ?? 512, signal: options.signal }), {
+        const answer = await this.governor.withLease(def, () => provider.generate(fullPrompt, { maxTokens: options.maxTokens ?? 512, signal: options.signal, think: resolveThink(config.thinkingMode, tag) }), {
           timeoutMs: options.leaseTimeoutMs,
           signal: options.signal,
         });

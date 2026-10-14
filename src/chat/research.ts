@@ -13,6 +13,9 @@ import { logger } from '../utils/logger.js';
 
 const LOOKUP_PATTERN = /\b(search(?:\s+for)?|look\s?up|research|latest|news|current(?:ly)?|today'?s|release\s+date|price\s+of)\b/i;
 
+/** Tells the owner where the query went; only the query text is sent to DuckDuckGo. */
+export const LIVE_SEARCH_NOTICE = 'SearXNG unreachable; used DuckDuckGo live search (only your query was sent).';
+
 const SEARCH_RESULTS = 5;
 const PAGES_TO_FETCH = 3;
 
@@ -70,6 +73,10 @@ export async function gatherResearch(
   if (outcome.results.length === 0) {
     await args.status('The web search returned no results. Answering without web sources.');
     return { facts: '', sources: [], engine: outcome.source };
+  }
+
+  if (outcome.source === 'duckduckgo-live') {
+    await args.status(LIVE_SEARCH_NOTICE);
   }
 
   const pages = await rt.distiller.fetchTopResults(outcome.results, { limit: PAGES_TO_FETCH, signal: args.signal });

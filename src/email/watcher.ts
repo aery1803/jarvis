@@ -1,6 +1,7 @@
 import { DocumentStore, Collection } from '../storage/collection.js';
 import type { ActionGateway } from '../devagent/action-gateway.js';
 import type { LLMProvider } from '../services/provider.js';
+import { resolveThink, type ThinkingMode } from '../services/thinking-control.js';
 import type { EmailMessage, EmailImportance, EmailTransport, RawEmailInput, SendEmailPayload } from './types.js';
 import { fenceUntrusted, stripControlChars } from '../bridge/untrusted.js';
 
@@ -35,6 +36,8 @@ export interface EmailWatcherOptions {
   transport?: EmailTransport;
   /** Default model for `summarize` and LLM drafts when a call does not pass its own. */
   llm?: LLMProvider;
+  /** Thinking control for LLM calls (default `off`: a hidden reasoning block would eat the token cap). */
+  thinkingMode?: ThinkingMode;
 }
 
 export interface DraftResult {
@@ -48,6 +51,7 @@ export class EmailWatcher {
   private collection: Collection<EmailMessage>;
   private readonly transport?: EmailTransport;
   private readonly llm?: LLMProvider;
+  private readonly thinkingMode: ThinkingMode;
 
   constructor(
     private store: DocumentStore,
@@ -57,6 +61,7 @@ export class EmailWatcher {
     this.collection = this.store.getCollection<EmailMessage>('emails');
     this.transport = options.transport;
     this.llm = options.llm;
+    this.thinkingMode = options.thinkingMode ?? 'off';
   }
 
   /**
@@ -150,7 +155,7 @@ export class EmailWatcher {
       this.fenceEmail(email),
     ].join('\n');
 
-    const summary = this.cleanLlmText(await llm.generate(prompt, { temperature: 0.2, maxTokens: 200 }));
+    const summary = this.cleanLlmText(await llm.generate(prompt, { temperature: 0.2, maxTokens: 200, think: resolveThink(this.thinkingMode, llm.getModel()) }));
     if (!summary) throw new Error('The model returned an empty summary.');
     await this.collection.updateOne({ id: emailId }, { summary, status: email.status === 'unread' ? 'summarized' : email.status });
     return summary;
@@ -177,7 +182,7 @@ export class EmailWatcher {
         ];
         if (customInstruction) promptLines.push(`Owner instruction (trusted): ${customInstruction}`);
         const prompt = [...promptLines, '', this.fenceEmail(email)].join('\n');
-        const draft = this.cleanLlmText(await llm.generate(prompt, { temperature: 0.4, maxTokens: 600 }));
+        const draft = this.cleanLlmText(await llm.generate(prompt, { temperature: 0.4, maxTokens: 600, think: resolveThink(this.thinkingMode, llm.getModel()) }));
         if (draft) result = { draft, kind: 'llm' };
         else fallbackReason = 'the model returned an empty draft';
       } catch (err: unknown) {

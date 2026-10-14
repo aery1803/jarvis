@@ -7,7 +7,7 @@ import { test, describe, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadConfig } from '../src/config.js';
 
-const KEYS = ['JARVIS_DEFAULT_MODEL', 'JARVIS_CONTEXT_TOKENS', 'JARVIS_MIN_HOST_FREE_GB', 'JARVIS_MIN_FREE_RAM_GB', 'JARVIS_MIN_FREE_RAM', 'JARVIS_ALLOW_MODEL_PULL', 'JARVIS_SEARCH_LIVE_FALLBACK', 'JARVIS_MCP_SERVERS', 'JARVIS_WEB_ALLOWED_IPS', 'JARVIS_POLL_INTERVAL'];
+const KEYS = ['JARVIS_DEFAULT_MODEL', 'JARVIS_CONTEXT_TOKENS', 'JARVIS_MIN_HOST_FREE_GB', 'JARVIS_MIN_FREE_RAM_GB', 'JARVIS_MIN_FREE_RAM', 'JARVIS_ALLOW_MODEL_PULL', 'JARVIS_SEARCH_LIVE_FALLBACK', 'JARVIS_THINKING', 'JARVIS_MCP_SERVERS', 'JARVIS_WEB_ALLOWED_IPS', 'JARVIS_POLL_INTERVAL'];
 
 describe('loadConfig', () => {
   afterEach(() => {
@@ -19,7 +19,8 @@ describe('loadConfig', () => {
     assert.equal(cfg.defaultModel, 'qwen3:8b');
     assert.equal(cfg.contextTokens, 16_384);
     assert.equal(cfg.allowModelPull, false);
-    assert.equal(cfg.searchLiveFallback, false);
+    assert.equal(cfg.searchLiveFallback, true, 'the live DuckDuckGo fallback is on unless the owner turns it off');
+    assert.equal(cfg.thinkingMode, 'off');
     assert.deepEqual(cfg.mcpServers, []);
     assert.equal(cfg.minHostFreeGb, 4);
     assert.equal(cfg.minFreeMemoryBytes, 4 * 1024 ** 3);
@@ -38,6 +39,22 @@ describe('loadConfig', () => {
     assert.equal(cfg.allowModelPull, true);
     assert.equal(cfg.minHostFreeGb, 12.5);
     assert.equal(cfg.minFreeMemoryBytes, Math.round(12.5 * 1024 ** 3));
+  });
+
+  test('JARVIS_SEARCH_LIVE_FALLBACK=0 turns the live fallback off', () => {
+    process.env.JARVIS_SEARCH_LIVE_FALLBACK = '0';
+    assert.equal(loadConfig().searchLiveFallback, false);
+    process.env.JARVIS_SEARCH_LIVE_FALLBACK = '1';
+    assert.equal(loadConfig().searchLiveFallback, true);
+  });
+
+  test('JARVIS_THINKING accepts off, auto and on, and anything else falls back to off', () => {
+    process.env.JARVIS_THINKING = 'auto';
+    assert.equal(loadConfig().thinkingMode, 'auto');
+    process.env.JARVIS_THINKING = 'ON';
+    assert.equal(loadConfig().thinkingMode, 'on');
+    process.env.JARVIS_THINKING = 'sometimes';
+    assert.equal(loadConfig().thinkingMode, 'off');
   });
 
   test('legacy JARVIS_MIN_FREE_RAM (bytes) still works', () => {

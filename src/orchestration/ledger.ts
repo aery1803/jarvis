@@ -12,9 +12,24 @@ export interface LedgerEntry {
   completionTokens: number;
   totalTokens: number;
   latencyMs: number;
+  /** End-to-end throughput: completionTokens / latencyMs. It includes model load, prompt evaluation and any hidden thinking, so it understates decode speed. */
   tokensPerSec: number;
+  /** Backend `load_duration`. Absent on rows written before the backend counters were captured. */
+  loadMs?: number;
+  /** Backend `prompt_eval_duration`. */
+  promptEvalMs?: number;
+  /** Backend `eval_duration`: time spent generating the completion tokens only. */
+  decodeMs?: number;
+  /** Backend `done_reason` (`stop`, `length`...). */
+  doneReason?: string;
+  /** completionTokens / decodeMs: the real generation speed. Absent when the backend gave no decode time. */
+  decodeTokensPerSec?: number;
+  /** promptTokens / promptEvalMs. */
+  promptEvalTokensPerSec?: number;
   timestamp: string;
 }
+
+type RecordInput = Omit<LedgerEntry, 'id' | 'totalTokens' | 'tokensPerSec' | 'decodeTokensPerSec' | 'promptEvalTokensPerSec' | 'timestamp'>;
 
 export interface LedgerSummary {
   totalInvocations: number;
@@ -22,7 +37,22 @@ export interface LedgerSummary {
   totalCompletionTokens: number;
   totalTokens: number;
   avgLatencyMs: number;
+  /** Mean end-to-end throughput (load, prompt evaluation and thinking included). */
   avgTokensPerSec: number;
+  /** Mean decode speed over only the rows that carry it; null when no row does. */
+  avgDecodeTokensPerSec: number | null;
+  /** Mean model load time over only the rows that carry it; null when no row does. */
+  avgLoadMs: number | null;
+}
+
+const round2 = (value: number): number => parseFloat(value.toFixed(2));
+
+function perSecond(tokens: number, ms: number | undefined): number | undefined {
+  return ms !== undefined && ms > 0 ? round2((tokens / ms) * 1000) : undefined;
+}
+
+function mean(values: number[]): number | null {
+  return values.length > 0 ? round2(values.reduce((a, b) => a + b, 0) / values.length) : null;
 }
 
 export class CostLedger {
@@ -32,13 +62,17 @@ export class CostLedger {
     this.collection = this.store.getCollection<LedgerEntry>('cost_ledger');
   }
 
-  async record(entry: Omit<LedgerEntry, 'id' | 'totalTokens' | 'tokensPerSec' | 'timestamp'>): Promise<LedgerEntry> {
+  async record(entry: RecordInput): Promise<LedgerEntry> {
     const totalTokens = entry.promptTokens + entry.completionTokens;
     const tokensPerSec = entry.latencyMs > 0 ? parseFloat(((entry.completionTokens / entry.latencyMs) * 1000).toFixed(2)) : 0;
     const timestamp = new Date().toISOString();
+    const decodeTokensPerSec = perSecond(entry.completionTokens, entry.decodeMs);
+    const promptEvalTokensPerSec = perSecond(entry.promptTokens, entry.promptEvalMs);
 
     const record: LedgerEntry = {
       ...entry,
+      ...(decodeTokensPerSec !== undefined ? { decodeTokensPerSec } : {}),
+      ...(promptEvalTokensPerSec !== undefined ? { promptEvalTokensPerSec } : {}),
       id: `ledg-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       totalTokens,
       tokensPerSec,
@@ -58,8 +92,17 @@ export class CostLedger {
     promptTokens: number;
     completionTokens: number;
     latencyMs: number;
+    loadMs?: number;
+    promptEvalMs?: number;
+    decodeMs?: number;
+    doneReason?: string;
   }): Promise<LedgerEntry> {
     const clean = (n: number) => (Number.isFinite(n) && n > 0 ? Math.round(n) : 0);
+    // A timing the backend did not report stays absent; clamping it to 0 would pass for a measured instant.
+    const optional = (n: number | undefined) => (n !== undefined && Number.isFinite(n) && n >= 0 ? Math.round(n) : undefined);
+    const loadMs = optional(usage.loadMs);
+    const promptEvalMs = optional(usage.promptEvalMs);
+    const decodeMs = optional(usage.decodeMs);
     return this.record({
       modelId: usage.model,
       lane: usage.lane,
@@ -68,6 +111,10 @@ export class CostLedger {
       promptTokens: clean(usage.promptTokens),
       completionTokens: clean(usage.completionTokens),
       latencyMs: clean(usage.latencyMs),
+      ...(loadMs !== undefined ? { loadMs } : {}),
+      ...(promptEvalMs !== undefined ? { promptEvalMs } : {}),
+      ...(decodeMs !== undefined ? { decodeMs } : {}),
+      ...(usage.doneReason ? { doneReason: usage.doneReason } : {}),
     });
   }
 
@@ -101,6 +148,8 @@ export class CostLedger {
         totalTokens: 0,
         avgLatencyMs: 0,
         avgTokensPerSec: 0,
+        avgDecodeTokensPerSec: null,
+        avgLoadMs: null,
       };
     }
 
@@ -123,6 +172,8 @@ export class CostLedger {
       totalTokens: promptSum + completionSum,
       avgLatencyMs: parseFloat((latencySum / entries.length).toFixed(2)),
       avgTokensPerSec: parseFloat((speedSum / entries.length).toFixed(2)),
+      avgDecodeTokensPerSec: mean(entries.flatMap((e) => (typeof e.decodeTokensPerSec === 'number' ? [e.decodeTokensPerSec] : []))),
+      avgLoadMs: mean(entries.flatMap((e) => (typeof e.loadMs === 'number' ? [e.loadMs] : []))),
     };
   }
 }

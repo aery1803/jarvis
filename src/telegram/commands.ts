@@ -11,6 +11,7 @@ import type { JarvisRuntime } from '../runtime/runtime.js';
 import { BenchmarkBusyError, type ModelBenchmarkScorecard } from '../eval/benchmark.js';
 import type { JarvisSession } from '../sessions/types.js';
 import { redactSensitive } from '../memory/sensitive.js';
+import { resolveThink } from '../services/thinking-control.js';
 import { code, esc, formatAge, formatBytes, oneLine } from './format.js';
 
 /** Per-owner settings kept by the bot and saved in the document store. */
@@ -212,7 +213,7 @@ function formatScorecard(card: ModelBenchmarkScorecard): string {
   if (card.status === 'error') {
     return `Benchmark of ${card.modelName}: ERROR. The model could not be benchmarked.\nReason: ${card.error ?? 'unknown'}`;
   }
-  const speed = card.tokensPerSecSource === 'none' ? 'n/a' : `${card.estimatedTokensPerSec} tokens/s (${card.tokensPerSecSource})`;
+  const speed = card.tokensPerSecSource === 'none' ? 'n/a' : `${card.decodeTokensPerSec} decode tokens/s`;
   const categories = Object.values(card.categories).map((entry) =>
     entry.total === 0 ? `- ${entry.category}: no answers` : `- ${entry.category}: ${entry.percentage}% (${entry.passed}/${entry.total}), avg ${entry.avgLatencyMs} ms`
   );
@@ -220,7 +221,7 @@ function formatScorecard(card: ModelBenchmarkScorecard): string {
     `Benchmark of ${card.modelName}`,
     `Score: ${card.overallScore}% (grade ${card.grade}), status ${card.status}`,
     ...(card.status !== 'complete' && card.error ? [`Note: ${card.error}`] : []),
-    `Answered ${card.answeredCases} case(s), ${card.erroredCases} errored. Throughput ${speed}, average latency ${card.avgLatencyMs} ms.`,
+    `Answered ${card.answeredCases} case(s), ${card.erroredCases} errored. Speed ${speed}, average latency ${card.avgLatencyMs} ms (${card.avgWarmLatencyMs} ms without model load), average load ${card.avgLoadMs} ms.`,
     `Host RAM during the run: ${card.systemSpecs.freeMemoryGB} GB free of ${card.systemSpecs.totalMemoryGB} GB.`,
     '',
     ...categories,
@@ -306,7 +307,7 @@ async function runCost(ctx: CommandContext): Promise<void> {
   const lines = ['Model usage (local tokens recorded in the ledger)', ''];
   for (const [model, summary] of entries) {
     lines.push(
-      `- ${model}: ${summary.totalInvocations} call(s), ${summary.totalPromptTokens} prompt + ${summary.totalCompletionTokens} completion tokens, avg ${summary.avgTokensPerSec.toFixed(1)} tokens/s, avg ${Math.round(summary.avgLatencyMs)} ms`
+      `- ${model}: ${summary.totalInvocations} call(s), ${summary.totalPromptTokens} prompt + ${summary.totalCompletionTokens} completion tokens, decode ${summary.avgDecodeTokensPerSec === null ? 'n/a' : `${summary.avgDecodeTokensPerSec.toFixed(1)} tokens/s`}, end-to-end ${summary.avgTokensPerSec.toFixed(1)} tokens/s (includes load and thinking), avg ${Math.round(summary.avgLatencyMs)} ms${summary.avgLoadMs === null ? '' : `, avg load ${Math.round(summary.avgLoadMs)} ms`}`
     );
   }
   lines.push('', `Total: ${total.totalInvocations} call(s), ${total.totalTokens} tokens.`);
@@ -449,7 +450,7 @@ async function runSkill(ctx: CommandContext): Promise<void> {
   const work = ctx.beginWork();
   try {
     const raw = await ctx.withTyping(() =>
-      withModelLease(ctx.rt, model, () => ctx.rt.providerFor(model).generate(skillPrompt(ctx.rawArgs), { signal: work.signal, maxTokens: 2048 }))
+      withModelLease(ctx.rt, model, () => ctx.rt.providerFor(model).generate(skillPrompt(ctx.rawArgs), { signal: work.signal, maxTokens: 2048, think: resolveThink(ctx.rt.config.thinkingMode, model, 'code') }))
     );
     const generated = parseGeneratedSkill(raw);
     if (!generated) {

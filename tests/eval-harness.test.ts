@@ -207,18 +207,92 @@ describe('ModelBenchmarkSuite honesty and controls', () => {
     assert.equal(card.results[0].completionTokens, 50);
   });
 
-  test('tokens/sec falls back to wall-clock, then to the labelled word estimate', async () => {
+  test('no backend timings means no speed is claimed (no wall-clock or word-count guess)', async () => {
     const wall = provider(async (prompt, options) => {
       options.onUsage?.({ model: 'm', promptTokens: 1, completionTokens: 10 });
       await new Promise((r) => setTimeout(r, 2));
       return answerFor(prompt);
     });
-    assert.equal((await new ModelBenchmarkSuite().runBenchmark(wall)).tokensPerSecSource, 'wall-clock');
-    const est = provider(async (prompt) => {
-      await new Promise((r) => setTimeout(r, 2));
+    const card = await new ModelBenchmarkSuite().runBenchmark(wall);
+    assert.equal(card.tokensPerSecSource, 'none');
+    assert.equal(card.decodeTokensPerSec, 0);
+    const bare = await new ModelBenchmarkSuite().runBenchmark(provider(async (prompt) => answerFor(prompt)));
+    assert.equal(bare.tokensPerSecSource, 'none');
+    assert.match(ModelBenchmarkSuite.formatMarkdownReport(bare), /decode speed n\/a/);
+  });
+
+  test('decode speed comes from eval_duration only: the first call\'s model load never lowers it', async () => {
+    let call = 0;
+    const p = provider(async (prompt, options) => {
+      const first = call++ === 0;
+      options.onUsage?.({
+        model: 'qwen3:8b',
+        promptTokens: 100,
+        completionTokens: 40,
+        evalDurationMs: 500,
+        promptEvalDurationMs: 50,
+        loadDurationMs: first ? 9000 : 10,
+        totalDurationMs: first ? 9600 : 600,
+      });
       return answerFor(prompt);
     });
-    assert.equal((await new ModelBenchmarkSuite().runBenchmark(est)).tokensPerSecSource, 'estimated');
+    const card = await new ModelBenchmarkSuite().runBenchmark(p);
+    assert.equal(card.tokensPerSecSource, 'backend');
+    assert.equal(card.decodeTokensPerSec, 80, '40 tokens in 500 ms on every case');
+    assert.equal(card.estimatedTokensPerSec, 80);
+    assert.equal(card.results[0].loadMs, 9000);
+    assert.equal(card.results[0].promptEvalMs, 50);
+    // (9000 + 9 * 10) / 10 cases
+    assert.equal(card.avgLoadMs, 909);
+    assert.ok(card.avgLatencyMs >= 0);
+    assert.ok(card.avgWarmLatencyMs <= card.avgLatencyMs);
+    assert.match(ModelBenchmarkSuite.formatTerminalReport(card), /Decode Speed\s+: 80 tokens\/sec/);
+    assert.match(ModelBenchmarkSuite.formatTerminalReport(card), /Average Load\s+: 909 ms/);
+  });
+
+  test('cases that report no eval_duration are left out of the decode figure instead of counting as zero', async () => {
+    let call = 0;
+    const p = provider(async (prompt, options) => {
+      options.onUsage?.(call++ === 0 ? { model: 'm', promptTokens: 1, completionTokens: 30, evalDurationMs: 1000 } : { model: 'm', promptTokens: 1, completionTokens: 500 });
+      return answerFor(prompt);
+    });
+    const card = await new ModelBenchmarkSuite().runBenchmark(p);
+    assert.equal(card.decodeTokensPerSec, 30);
+  });
+
+  test('thinking: qwen3 gets think:false by default, a lifted cap for a model left to think, and the mode can be changed', async () => {
+    const seen: GenerateOptions[] = [];
+    const record = (model: string) => provider(async (prompt, options) => (seen.push(options), answerFor(prompt)), model);
+    await new ModelBenchmarkSuite().runBenchmark(record('qwen3:8b'));
+    assert.ok(seen.every((o) => o.think === false));
+    assert.ok(seen.every((o) => o.maxTokens === 768));
+
+    seen.length = 0;
+    await new ModelBenchmarkSuite().runBenchmark(record('llama3.2:3b'));
+    assert.ok(seen.every((o) => o.think === undefined));
+    assert.ok(seen.every((o) => o.maxTokens === 2048), 'a model left on its default gets room to finish any reasoning');
+
+    seen.length = 0;
+    await new ModelBenchmarkSuite({ thinkingMode: 'on' }).runBenchmark(record('qwen3:8b'));
+    assert.ok(seen.every((o) => o.think === true));
+
+    seen.length = 0;
+    await new ModelBenchmarkSuite({ thinkingMode: 'auto' }).runBenchmark(record('qwen3:8b'));
+    assert.ok(seen.every((o) => o.think === undefined));
+  });
+
+  test('the eval harness sends think:false to qwen3 and nothing to a non-reasoning model', async () => {
+    const seen: GenerateOptions[] = [];
+    const p = (model: string) => provider(async (_prompt, options) => (seen.push(options), '4:00 PM'), model);
+    await new EvaluationHarness(p('qwen3:8b')).runAll();
+    assert.equal(seen.length, 3);
+    assert.ok(seen.every((o) => o.think === false));
+    seen.length = 0;
+    await new EvaluationHarness(p('mistral:7b')).runAll();
+    assert.ok(seen.every((o) => o.think === undefined));
+    seen.length = 0;
+    await new EvaluationHarness(p('qwen3:8b'), { thinkingMode: 'on' }).runAll();
+    assert.ok(seen.every((o) => o.think === true));
   });
 
   test('the weighted score honours case weights', async () => {

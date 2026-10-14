@@ -394,6 +394,7 @@ export async function createRuntime(options: RuntimeOptions = {}): Promise<Jarvi
     new ModelProvisioner(provider ?? providerFor(cfg.defaultModel), {
       registry,
       governor,
+      defaultModel: cfg.defaultModel,
       // The same probe moment as `snapshot.loaded`, so free VRAM and the resident list never disagree.
       getVramFreeBytes: async () => (await refreshInventory()).vramFreeBytes,
       listInstalled: async () => {
@@ -427,7 +428,7 @@ export async function createRuntime(options: RuntimeOptions = {}): Promise<Jarvi
   const browser = new BrowserAutomationEngine(gateway, options.browserOptions);
   const mobile = new MobileBridge({ transport: options.mobileTransport ?? new AdbTransport() });
   const media = new MediaService({ baseUrl: cfg.ollamaBaseUrl, ...options.mediaOptions });
-  const email = new EmailWatcher(store, gateway, { transport: options.emailTransport, llm: providerFor(cfg.defaultModel) });
+  const email = new EmailWatcher(store, gateway, { transport: options.emailTransport, llm: providerFor(cfg.defaultModel), thinkingMode: cfg.thinkingMode });
   const emailTransportConfigured = options.emailTransport !== undefined;
 
   const skills = new SkillGenerator(store);
@@ -439,6 +440,7 @@ export async function createRuntime(options: RuntimeOptions = {}): Promise<Jarvi
     distill: distiller,
     consensus,
     lane: 'resident',
+    thinkingMode: cfg.thinkingMode,
     health: async () => {
       const inventory = await refreshInventory();
       const vram = inventory.vramFreeBytes === null ? 'unknown VRAM' : `${(inventory.vramFreeBytes / 2 ** 30).toFixed(1)} GiB VRAM free`;
@@ -559,8 +561,8 @@ export async function createRuntime(options: RuntimeOptions = {}): Promise<Jarvi
     skills,
     reflexes,
     orchestrator,
-    evalHarness: new EvaluationHarness(providerFor(cfg.defaultModel)),
-    benchmark: { suite: new ModelBenchmarkSuite(), guard: benchmarkGuard, cache: benchmarkCache },
+    evalHarness: new EvaluationHarness(providerFor(cfg.defaultModel), { thinkingMode: cfg.thinkingMode }),
+    benchmark: { suite: new ModelBenchmarkSuite({ thinkingMode: cfg.thinkingMode }), guard: benchmarkGuard, cache: benchmarkCache },
     email,
     browser,
     host,

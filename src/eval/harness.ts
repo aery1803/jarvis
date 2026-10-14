@@ -1,4 +1,5 @@
 import type { LLMProvider } from '../services/provider.js';
+import { resolveThink, type ThinkingMode } from '../services/thinking-control.js';
 import { findToolCall, isPromptEcho, isRefusal, stripThinking } from './answer-check.js';
 
 export interface EvalTestCase {
@@ -43,10 +44,17 @@ export interface EvalReport {
   results: EvalCaseResult[];
 }
 
+export interface EvaluationHarnessOptions {
+  /** Default `off`: qwen3 would otherwise spend its token budget on a hidden reasoning block and score the budget, not the model. */
+  thinkingMode?: ThinkingMode;
+}
+
 export class EvaluationHarness {
   private testCases: EvalTestCase[] = [];
+  private thinkingMode: ThinkingMode;
 
-  constructor(private provider: LLMProvider) {
+  constructor(private provider: LLMProvider, options: EvaluationHarnessOptions = {}) {
+    this.thinkingMode = options.thinkingMode ?? 'off';
     this.initDefaultCases();
   }
 
@@ -89,6 +97,7 @@ export class EvaluationHarness {
     const start = Date.now();
     try {
       const response: unknown = await this.provider.generate(testCase.prompt, {
+        think: resolveThink(this.thinkingMode, this.provider.getModel()),
         signal: options.signal,
         timeoutMs: options.timeoutMs ?? 120_000,
       });
