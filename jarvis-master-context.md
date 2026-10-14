@@ -1291,11 +1291,11 @@ Decision: **Claude writes everything the blueprint needs; the owner's local AI b
   - Guarded by Jarvis Action Gateway instead of GitHub web UI branch protection ruleset.
 
 ##### P10. The board, its fields, and the nine labels
+- [x] **Nine repository labels: CREATED & VERIFIED** on `aery1803/jarvis`:
+  `concept-complete`, `ai-working`, `needs-owner`, `blocked`, `bug`, `release-approved`, `ai-proposed`, `ai-authored`, `owner-approved`.
 - [ ] Create the GitHub Project board at `https://github.com/users/aery1803/projects` (Board layout, linked to `aery1803/jarvis`).
 - [ ] Configure the **Status** column with **exactly five options in order:** `Concept`, `Ready for Dev`, `Code Review`, `QA`, `Done`.
 - [ ] Add the single-select field **Type** with options: `Feature`, `Story`, `Bug`.
-- [ ] Ensure the **nine labels** exist on the repository:
-  `concept-complete`, `ai-working`, `needs-owner`, `blocked`, `bug`, `release-approved`, `ai-proposed`, `ai-authored`, `owner-approved`.
 - **Done when:** The board columns and all 9 labels match.
 
 ##### P11. The limited token (Windows Credential Manager)
