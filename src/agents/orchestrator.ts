@@ -22,7 +22,9 @@ import { resolveThink, type ThinkingMode } from '../services/thinking-control.js
 const DEFAULT_BUDGET: AgentBudget = {
   maxSteps: 8,
   maxTokens: 4000,
-  timeoutMs: 30000,
+  // A synthesis step evaluates ~2k prompt tokens and writes a few hundred more; at this box's measured ~12 tokens/s
+  // decode and ~120 tokens/s prompt evaluation that takes 40-70 s, so the old 30 s budget aborted healthy runs.
+  timeoutMs: 120_000,
 };
 
 const MIN_COMPLETION_TOKENS = 64;
