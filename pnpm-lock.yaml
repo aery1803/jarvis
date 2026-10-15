@@ -177,7 +177,7 @@ importers:
         specifier: 26.6.5
         version: 26.6.5
       nodemon:
-        specifier: ^3.1.14
+        specifier: 3.1.14
         version: 3.1.14
       tsx:
         specifier: 4.23.15
