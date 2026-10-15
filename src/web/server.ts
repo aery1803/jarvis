@@ -26,6 +26,7 @@ import { probeGpu, collectDiagnostics, type Diagnostics } from './diagnostics.js
 import { HttpError, errorMessage, type Route, type RouteContext } from './routes/types.js';
 import { createSystemRoutes } from './routes/system.js';
 import { createOpsRoutes } from './routes/ops.js';
+import { createSpeedRoutes } from './routes/speed.js';
 import { createSkillRoutes } from './routes/skills.js';
 import { createEmailRoutes } from './routes/email.js';
 import { createApprovalFlow } from './routes/approval-flow.js';
@@ -293,7 +294,7 @@ export class JarvisWebServer {
     if (!rt.approvals.hasNotifier()) rt.approvals.setNotifier(async () => undefined);
 
     const flow = createApprovalFlow();
-    this.routes = [...createSystemRoutes(), ...createOpsRoutes(), ...createSkillRoutes(flow), ...createEmailRoutes(flow)];
+    this.routes = [...createSystemRoutes(), ...createOpsRoutes(), ...createSpeedRoutes(), ...createSkillRoutes(flow), ...createEmailRoutes(flow)];
 
     await new Promise<void>((resolve, reject) => {
       const server = http.createServer((req, res) => {

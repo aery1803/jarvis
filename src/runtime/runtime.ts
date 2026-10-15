@@ -26,7 +26,7 @@ import { MemoryGovernor } from '../orchestration/governor.js';
 import { CascadeRouter } from '../orchestration/router.js';
 import { ModelProvisioner } from '../orchestration/provisioner.js';
 import { getSharedVramProbe, installedFromDiagnostics, type VramProbe } from '../orchestration/vram.js';
-import { OllamaProvider, type LLMProvider } from '../services/provider.js';
+import { OllamaProvider, type LLMProvider, type SpeedProbeClient } from '../services/provider.js';
 import { SearXNGClient, type SearchOutcome } from '../services/searxng.js';
 import { ContentDistiller } from '../services/scraper.js';
 import { ConsensusEngine } from '../services/consensus.js';
@@ -37,6 +37,7 @@ import { SkillGenerator } from '../skills/generator.js';
 import { ReflexCompiler } from '../skills/reflex.js';
 import { MultiAgentOrchestrator, type ConsensusPort, type DistillPort } from '../agents/orchestrator.js';
 import { EvaluationHarness } from '../eval/harness.js';
+import type { EvalToolbox } from '../eval/graders.js';
 import { ModelBenchmarkSuite, benchmarkGuard, benchmarkCache, type BenchmarkCache, type BenchmarkGuard } from '../eval/benchmark.js';
 import { EmailWatcher } from '../email/watcher.js';
 import type { EmailTransport } from '../email/types.js';
@@ -104,6 +105,8 @@ export interface RuntimeOptions {
   // Injectable edges, so tests never touch the network, Ollama, adb or a GPU.
   /** Builds the inference provider for a model tag. Defaults to `OllamaProvider` on `ollamaBaseUrl`. */
   providerFactory?: (model: string) => LLMProvider;
+  /** Builds the client the speed probe calls Ollama with. Defaults to an `OllamaProvider` on `ollamaBaseUrl`. */
+  speedProbeFactory?: (model: string) => SpeedProbeClient;
   /** Reads Ollama's installed and resident models. Defaults to `probeOllama`. */
   fetchInventory?: (baseUrl: string) => Promise<Diagnostics['ollama']>;
   /** Free VRAM in bytes, null when unknown. Defaults to the cached `probeGpu()` probe. */
@@ -227,6 +230,8 @@ export interface JarvisRuntime {
 
   /** The inference provider for a model tag. A new provider per call: they hold no connection state. */
   providerFor(model: string): LLMProvider;
+  /** The client `POST /api/probe/speed` measures a model with (Ollama's own counters). */
+  speedProbeFor(model: string): SpeedProbeClient;
   /** A provisioner on the shared registry and governor; `provider` only serves its `pullModel`/`setModel` calls. */
   createProvisioner(provider?: LLMProvider): ModelProvisioner;
   /** Probes Ollama and VRAM (cached about 15 s, concurrent calls share one probe) and reconciles the shared registry. Never throws. */
@@ -322,6 +327,9 @@ export async function createRuntime(options: RuntimeOptions = {}): Promise<Jarvi
     options.providerFactory
       ? options.providerFactory(model)
       : new OllamaProvider({ baseUrl: cfg.ollamaBaseUrl, model, defaultContextTokens: cfg.contextTokens });
+
+  const speedProbeFor = (model: string): SpeedProbeClient =>
+    options.speedProbeFactory ? options.speedProbeFactory(model) : new OllamaProvider({ baseUrl: cfg.ollamaBaseUrl, model });
 
   let snapshot: InventorySnapshot = {
     reachable: false,
@@ -538,6 +546,9 @@ export async function createRuntime(options: RuntimeOptions = {}): Promise<Jarvi
   let closed = false;
   let closing: Promise<void> | null = null;
 
+  // The same registry and parser the chat pipeline uses, so tool cases are offered and judged exactly as a chat turn is.
+  const evalToolbox: EvalToolbox = { registry: tools, parseCalls: (text) => executor.parseModelToolCalls(text) };
+
   const runtime: JarvisRuntime = {
     config: cfg,
     ownerUserId,
@@ -561,8 +572,8 @@ export async function createRuntime(options: RuntimeOptions = {}): Promise<Jarvi
     skills,
     reflexes,
     orchestrator,
-    evalHarness: new EvaluationHarness(providerFor(cfg.defaultModel), { thinkingMode: cfg.thinkingMode }),
-    benchmark: { suite: new ModelBenchmarkSuite({ thinkingMode: cfg.thinkingMode }), guard: benchmarkGuard, cache: benchmarkCache },
+    evalHarness: new EvaluationHarness(providerFor(cfg.defaultModel), { thinkingMode: cfg.thinkingMode, toolbox: evalToolbox }),
+    benchmark: { suite: new ModelBenchmarkSuite({ thinkingMode: cfg.thinkingMode, toolbox: evalToolbox }), guard: benchmarkGuard, cache: benchmarkCache },
     email,
     browser,
     host,
@@ -576,6 +587,7 @@ export async function createRuntime(options: RuntimeOptions = {}): Promise<Jarvi
       return closed;
     },
     providerFor,
+    speedProbeFor,
     createProvisioner,
     refreshInventory,
 

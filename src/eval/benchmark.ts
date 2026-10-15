@@ -3,23 +3,14 @@
  * Evaluates local and remote LLMs across Reasoning, Coding, Tool Calling, and Retrieval.
  */
 
-import type { GenerationUsage, LLMProvider } from '../services/provider.js';
-import { CognitionEngine } from '../agents/cognition.js';
+import type { LLMProvider } from '../services/provider.js';
 import { resolveThink, type ThinkingMode } from '../services/thinking-control.js';
-import { findToolCall, isPromptEcho, isRefusal, stripThinking } from './answer-check.js';
+import { MIN_COMPLETION_TOKENS, executeCase } from './case-runner.js';
+import { buildStandardCases, type CaseDefinition } from './cases.js';
+import type { EvalToolbox } from './graders.js';
 import os from 'node:os';
 
-export interface BenchmarkCase {
-  id: string;
-  category: 'reasoning' | 'coding' | 'tool_calling' | 'retrieval';
-  title: string;
-  prompt: string;
-  /** Anchor it to the answer: a pattern that also matches the prompt's own words passes on an echo. */
-  expectedPattern: RegExp | string;
-  /** An extra check on the answer (parse the emitted JSON, check the code's structure). Both must hold. */
-  verify?: (output: string) => boolean;
-  weight: number; // 1 to 5
-}
+export type BenchmarkCase = CaseDefinition;
 
 export interface BenchmarkCaseResult {
   id: string;
@@ -28,12 +19,18 @@ export interface BenchmarkCaseResult {
   passed: boolean;
   /** True when the model could not be queried at all (HTTP error, network, timeout). Not a wrong answer. */
   errored?: boolean;
-  score: number; // 0.0 to 1.0
+  score: number; // 1 for a pass, otherwise 0
+  /** Why the case passed, failed or errored. Reported for every case. */
+  reason: string;
+  /** Same text as `reason`, set only when the case did not pass. */
+  notes?: string;
+  /** Reported, never graded: a correct answer is correct however long it took. */
   latencyMs: number;
   outputPreview: string;
-  notes?: string;
   promptTokens?: number;
   completionTokens?: number;
+  /** completion tokens / `eval_duration` for this case; absent when the backend reported no decode time. */
+  decodeTokensPerSec?: number;
   /** Backend-reported decode time (`eval_duration`), when available. */
   evalDurationMs?: number;
   /** Backend-reported model load time (`load_duration`); large only on the call that loaded the model. */
@@ -68,11 +65,13 @@ export interface ModelBenchmarkScorecard {
   status: BenchmarkStatus;
   /** Why the benchmark could not run (first failure message). Set when status is `error`, `partial` or `aborted`. */
   error?: string;
-  /** Weighted score over answered cases, 0 to 100. Meaningless when status is `error`; check `status` / `grade` first. */
+  /** Passed / answered cases, 0 to 100 (every case counts the same). Meaningless when status is `error`; check `status` / `grade` first. */
   overallScore: number;
   grade: BenchmarkGrade;
   answeredCases: number;
   erroredCases: number;
+  /** The thinking mode every case ran with: `off` (think:false sent), `on`, or the model's own default. */
+  thinking: 'off' | 'on' | 'model default';
   totalLatencyMs: number;
   /** End-to-end mean per case, including model load, prompt evaluation and any thinking. */
   avgLatencyMs: number;
@@ -110,6 +109,11 @@ export interface BenchmarkRunOptions {
 export interface ModelBenchmarkSuiteOptions {
   /** Default `off`: qwen3 would otherwise spend the completion cap on a hidden reasoning block and score the cap, not the model. */
   thinkingMode?: ThinkingMode;
+  /**
+   * The registry and parser the chat pipeline uses. The tool-calling cases offer its real schemas and grade the reply
+   * with its real parser and validator, so without it those cases are left out instead of being faked.
+   */
+  toolbox?: EvalToolbox;
 }
 
 export class BenchmarkBusyError extends Error {
@@ -169,28 +173,6 @@ export class BenchmarkCache {
 
 export const benchmarkCache = new BenchmarkCache();
 
-function coerceOutput(response: unknown): string {
-  if (typeof response === 'string') return response;
-  if (typeof response === 'object' && response !== null && typeof (response as { text?: unknown }).text === 'string') {
-    return (response as { text: string }).text;
-  }
-  return String(response);
-}
-
-/** Why an output does not count, or null when it passes: a pattern match alone is never enough. */
-export function judgeAnswer(testCase: Pick<BenchmarkCase, 'prompt' | 'expectedPattern' | 'verify'>, output: string): { passed: boolean; note?: string } {
-  if (output.trim() === '') return { passed: false, note: 'empty answer' };
-  if (isRefusal(output)) return { passed: false, note: 'the model declined or did not know' };
-  if (isPromptEcho(output, testCase.prompt)) return { passed: false, note: 'the output repeats the question' };
-  const matched =
-    typeof testCase.expectedPattern === 'string'
-      ? output.toLowerCase().includes(testCase.expectedPattern.toLowerCase())
-      : testCase.expectedPattern.test(output);
-  if (!matched) return { passed: false };
-  if (testCase.verify && !testCase.verify(output)) return { passed: false, note: 'the answer failed its structural check' };
-  return { passed: true };
-}
-
 function gradeFor(score: number): BenchmarkGrade {
   if (score >= 95) return 'A+';
   if (score >= 90) return 'A';
@@ -203,118 +185,12 @@ function gradeFor(score: number): BenchmarkGrade {
 export class ModelBenchmarkSuite {
   private testCases: BenchmarkCase[] = [];
   private thinkingMode: ThinkingMode;
+  private toolbox: EvalToolbox | undefined;
 
   constructor(options: ModelBenchmarkSuiteOptions = {}) {
     this.thinkingMode = options.thinkingMode ?? 'off';
-    this.initStandardCases();
-  }
-
-  private initStandardCases(): void {
-    // 1. REASONING & LOGIC
-    this.addCase({
-      id: 'reasoning-01-temporal',
-      category: 'reasoning',
-      title: 'Time & Distance Calculation',
-      prompt: 'If a train departs at 10:30 AM and travels 180 miles at 60 mph without stopping, what time does it arrive?',
-      expectedPattern: /(?<![\d:])(?:1:30\s*(?:pm|p\.m\.)|13:30)(?![\d])/i,
-      weight: 3,
-    });
-
-    this.addCase({
-      id: 'reasoning-02-deduction',
-      category: 'reasoning',
-      title: 'Syllogistic Logical Deduction',
-      prompt: 'Premise 1: All high-memory APUs use unified memory. Premise 2: The AMD Strix Halo is a high-memory APU. Does the Strix Halo use unified memory? Answer directly with Yes or No, and state why.',
-      expectedPattern: /^[^\p{L}\p{N}]*yes\b(?!\s+or\s+no\b)/iu,
-      weight: 3,
-    });
-
-    this.addCase({
-      id: 'reasoning-03-sequencing',
-      category: 'reasoning',
-      title: 'Task Sequencing & Dependencies',
-      prompt: 'Task A takes 1 hour. Task B depends on A and takes 2 hours. Task C depends on B and takes 1 hour. If we start Task A at 8:00 AM, at what time is Task C completed?',
-      expectedPattern: /(?<![\d:])(?:12:00(?!\s*am)|12\s*pm)(?![\d])|\bnoon\b/i,
-      weight: 4,
-    });
-
-    // 2. CODING & ALGORITHMS
-    this.addCase({
-      id: 'coding-01-algorithm',
-      category: 'coding',
-      title: 'TypeScript Memoized Algorithm',
-      prompt: 'Write a TypeScript function fibonacci(n: number): number that uses memoization to compute the nth Fibonacci number efficiently.',
-      // The prompt names `function fibonacci(n: number): number`; only an implementation has a body that returns.
-      expectedPattern: /(?:function\s+fibonacci|const\s+fibonacci\s*=)[^{]*\{[\s\S]*\breturn\b/i,
-      verify: (output) => /\b(?:memo\w*|cache|Map)\b/i.test(output),
-      weight: 5,
-    });
-
-    this.addCase({
-      id: 'coding-02-debugging',
-      category: 'coding',
-      title: 'Boundary Bug Identification',
-      prompt: 'Find the bug in this function:\nfunction sum(arr: number[]): number {\n  let total = 0;\n  for (let i = 0; i <= arr.length; i++) {\n    total += arr[i];\n  }\n  return total;\n}\nWhat causes the bug and what is the fix?',
-      expectedPattern: /\bi\s*<\s*(?:arr|array)\.length\b|\boff[- ]by[- ]one\b|\bout[- ]of[- ](?:bounds|range)\b/i,
-      weight: 4,
-    });
-
-    this.addCase({
-      id: 'coding-03-self-improvement',
-      category: 'coding',
-      title: 'Security Rule Formulation',
-      prompt: 'Write a clean security rule for an autonomous AI agent specifying that all sensitive API tokens must be stored in an AES-256 encrypted vault rather than plain text.',
-      expectedPattern: /\b(?:must|shall|never|required|prohibited|forbidden)\b/i,
-      verify: (output) => /\b(?:vault|encrypt\w*|aes-256)\b/i.test(output) && /\b(?:tokens?|secrets?|credentials?|keys?)\b/i.test(output),
-      weight: 4,
-    });
-
-    // 3. TOOL CALLING & JSON SCHEMA
-    this.addCase({
-      id: 'tool-01-system-stats',
-      category: 'tool_calling',
-      title: 'System Stats Tool Invocation',
-      prompt: 'You are Jarvis. To answer this request, emit a JSON tool call with format {"tool": "tool_name", "parameters": {}} to check the system host memory.',
-      expectedPattern: /"tool"\s*:\s*"system_stats"/i,
-      // The emitted JSON is parsed: the prompt's own `tool_name` template is not a tool.
-      verify: (output) => findToolCall(output, 'system_stats') !== null,
-      weight: 4,
-    });
-
-    this.addCase({
-      id: 'tool-02-search',
-      category: 'tool_calling',
-      title: 'Search Tool Parameter Schema',
-      prompt: 'You need to research "Radeon 8060S memory bandwidth". Output a JSON tool call with {"tool": "searxng_search", "parameters": {"query": "..."}}.',
-      expectedPattern: /"tool"\s*:\s*"searxng_search"/i,
-      // The prompt's template has `"query": "..."`; a real call carries a query about the topic.
-      verify: (output) => {
-        const query = findToolCall(output, 'searxng_search')?.parameters.query;
-        return typeof query === 'string' && /\b8060s\b/i.test(query) && /\bbandwidth\b/i.test(query);
-      },
-      weight: 4,
-    });
-
-    // 4. ARCHITECTURE & RETRIEVAL
-    this.addCase({
-      id: 'retrieval-01-hardware',
-      category: 'retrieval',
-      title: 'Workstation Hardware Profile',
-      prompt: 'What hardware runs the Jarvis autonomous assistant?',
-      // The hardware profile is injected by `CognitionEngine.formatPrompt`, so this reads it back; a refusal or an unrelated reply fails.
-      expectedPattern: /\b(?:ASUS|ROG|Flow\s*Z13|Z13|Radeon|8060S|Ryzen)\b/i,
-      weight: 3,
-    });
-
-    this.addCase({
-      id: 'retrieval-02-security',
-      category: 'retrieval',
-      title: 'Three-Tier Safety Architecture',
-      prompt: 'What are the three action execution tiers in Jarvis security?',
-      expectedPattern: /\bTier 1\b/i,
-      verify: (output) => /\bTier 2\b/i.test(output) && /\bTier 3\b/i.test(output),
-      weight: 3,
-    });
+    this.toolbox = options.toolbox;
+    for (const testCase of buildStandardCases({ includeTools: this.toolbox !== undefined })) this.addCase(testCase);
   }
 
   addCase(testCase: BenchmarkCase): void {
@@ -349,76 +225,45 @@ export class ModelBenchmarkSuite {
         aborted = true;
         break;
       }
-      const start = Date.now();
-      const reported: GenerationUsage[] = [];
-      let result: BenchmarkCaseResult;
-      try {
-        const promptToSend = CognitionEngine.formatPrompt(tc.prompt, {
-          taskType: tc.category === 'coding' ? 'code' : 'chat',
-          activeModel: modelName,
-        });
-        const response = await provider.generate(promptToSend, {
-          temperature: 0.2,
-          // A model left to think needs room to finish its reasoning before the visible answer starts.
-          maxTokens: options.maxTokens ?? (think === false ? 768 : 2048),
-          think,
-          contextTokens: options.contextTokens ?? 4096,
-          signal: options.signal,
-          timeoutMs: options.caseTimeoutMs ?? 120_000,
-          onUsage: (u) => {
-            reported.push(u);
-          },
-        });
-        const latencyMs = Date.now() - start;
-        const usage: GenerationUsage | undefined = reported[reported.length - 1];
-        totalLatency += latencyMs;
-
-        const output = stripThinking(coerceOutput(response));
-
-        const judged = judgeAnswer(tc, output);
-        const passed = judged.passed;
-
-        result = {
-          id: tc.id,
-          category: tc.category,
-          title: tc.title,
-          passed,
-          score: passed ? 1.0 : 0.0,
-          latencyMs,
-          outputPreview: output.slice(0, 100).replace(/\n/g, ' '),
-          ...(judged.note ? { notes: judged.note } : {}),
-          promptTokens: usage?.promptTokens,
-          completionTokens: usage?.completionTokens,
-          evalDurationMs: usage?.evalDurationMs,
-          loadMs: usage?.loadDurationMs,
-          promptEvalMs: usage?.promptEvalDurationMs,
-        };
-      } catch (err: unknown) {
-        if (options.signal?.aborted) {
-          aborted = true;
-          break;
-        }
-        const latencyMs = Date.now() - start;
-        totalLatency += latencyMs;
-        result = {
-          id: tc.id,
-          category: tc.category,
-          title: tc.title,
-          passed: false,
-          errored: true,
-          score: 0.0,
-          latencyMs,
-          outputPreview: '',
-          notes: `Failed: ${err instanceof Error ? err.message : String(err)}`,
-        };
+      const run = await executeCase(tc, {
+        provider,
+        think,
+        // A model left to think needs room to finish its reasoning before the visible answer starts.
+        maxTokens: options.maxTokens ?? (think === false ? MIN_COMPLETION_TOKENS : 2048),
+        contextTokens: options.contextTokens ?? 4096,
+        timeoutMs: options.caseTimeoutMs ?? 120_000,
+        signal: options.signal,
+        toolbox: this.toolbox,
+      });
+      if (run.aborted) {
+        aborted = true;
+        break;
       }
+      totalLatency += run.latencyMs;
+      const result: BenchmarkCaseResult = {
+        id: tc.id,
+        category: tc.category,
+        title: tc.title,
+        passed: run.passed,
+        ...(run.errored ? { errored: true } : {}),
+        score: run.passed ? 1 : 0,
+        reason: run.reason,
+        ...(run.passed ? {} : { notes: run.reason }),
+        latencyMs: run.latencyMs,
+        outputPreview: run.output.slice(0, 100).replace(/\n/g, ' '),
+        promptTokens: run.usage?.promptTokens,
+        completionTokens: run.usage?.completionTokens,
+        ...(run.decodeTokensPerSec !== undefined ? { decodeTokensPerSec: run.decodeTokensPerSec } : {}),
+        evalDurationMs: run.usage?.evalDurationMs,
+        loadMs: run.usage?.loadDurationMs,
+        promptEvalMs: run.usage?.promptEvalDurationMs,
+      };
       results.push(result);
       options.onProgress?.(results.length, this.testCases.length, result);
     }
 
     const answered = results.filter((r) => !r.errored);
     const errored = results.filter((r) => r.errored);
-    const weightOf = (id: string): number => this.testCases.find((c) => c.id === id)?.weight ?? 1;
 
     // Category Aggregations
     const categories: Record<string, CategorySummary> = {};
@@ -438,10 +283,8 @@ export class ModelBenchmarkSuite {
       };
     }
 
-    // Weighted score over the cases that actually got an answer
-    const totalWeight = answered.reduce((sum, r) => sum + weightOf(r.id), 0);
-    const earnedWeight = answered.reduce((sum, r) => sum + weightOf(r.id) * r.score, 0);
-    const overallScore = totalWeight > 0 ? Math.round((earnedWeight / totalWeight) * 100) : 0;
+    // Latency never enters the score: a correct answer is correct however long the model took to write it.
+    const overallScore = answered.length > 0 ? Math.round((answered.filter((r) => r.passed).length / answered.length) * 100) : 0;
 
     let status: BenchmarkStatus = 'complete';
     let error: string | undefined;
@@ -492,6 +335,7 @@ export class ModelBenchmarkSuite {
       grade,
       answeredCases: answered.length,
       erroredCases: errored.length,
+      thinking: think === false ? 'off' : think === true ? 'on' : 'model default',
       totalLatencyMs: totalLatency,
       avgLatencyMs: results.length > 0 ? Math.round(totalLatency / results.length) : 0,
       avgWarmLatencyMs: results.length > 0 ? Math.round(warmLatencyTotal / results.length) : 0,
@@ -570,6 +414,13 @@ export class ModelBenchmarkSuite {
       lines.push(`  - ${c.category.padEnd(14)}: [${bar}] ${c.percentage.toString().padStart(3)}% (${c.passed}/${c.total}) - ${c.avgLatencyMs}ms`);
     }
 
+    lines.push('--------------------------------------------------------------');
+    lines.push(` Cases (latency and speed are reported, never graded; thinking: ${card.thinking}):`);
+    for (const r of card.results) {
+      const verdict = r.errored ? 'ERROR' : r.passed ? 'PASS ' : 'FAIL ';
+      const speed = r.decodeTokensPerSec === undefined ? '' : `, ${r.decodeTokensPerSec} t/s`;
+      lines.push(`  ${verdict} ${r.id} (${r.latencyMs} ms${r.completionTokens === undefined ? '' : `, ${r.completionTokens} tokens`}${speed}) - ${r.reason}`);
+    }
     lines.push('--------------------------------------------------------------');
     lines.push(` Recommended Assignment : ${card.recommendedLanes.join(', ').toUpperCase() || 'NONE'}`);
     lines.push('==============================================================');

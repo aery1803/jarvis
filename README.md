@@ -101,7 +101,8 @@ The web UI uses these endpoints on `http://localhost:3000` (POST and DELETE need
 | `POST /api/kill`, `POST /api/kill/reset` | Engage or reset the kill switch |
 | `POST /api/media/describe` | Describe an image with an installed vision model |
 | `GET/POST /api/skills`, `POST /api/skills/:id/test`, `POST /api/skills/:id/promote` | Skills |
-| `GET/POST /api/benchmark`, `GET/POST /api/eval` | Benchmarks and evaluation (one run at a time) |
+| `GET/POST /api/benchmark`, `GET/POST /api/eval` | Benchmarks and evaluation (one run at a time). Accuracy is correctness only; latency and decode t/s are reported per case |
+| `POST /api/probe/speed` | Decode-speed probe: body `{model?, numCtx? (512-131072), numPredict? (default 128, max 512), repeat? (1-5, default 3), think?}`; returns Ollama's own load, prompt-eval and decode counters as ms and tokens/s, the median and best decode t/s of the warm runs, and what `/api/ps` reports. Shares the one-at-a-time slot with benchmarks |
 | `POST /api/agents/research` | Multi-agent research |
 | `GET /api/email`, `POST /api/email/ingest`, `POST /api/email/:id/draft`, `POST /api/email/:id/send` | Email (sending needs your approval) |
 

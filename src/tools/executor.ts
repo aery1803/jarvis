@@ -366,41 +366,49 @@ export class ToolExecutor {
    * message, in text order. Malformed JSON and non-call objects are ignored. Capped at `maxCallsPerTurn`.
    */
   public parseModelToolCalls(text: string, maxCalls: number = this.maxCallsPerTurn): ToolCall[] {
-    const input = text.length > MAX_PARSE_INPUT_CHARS ? text.slice(0, MAX_PARSE_INPUT_CHARS) : text;
-    const candidates: Array<{ at: number; body: string }> = [];
-
-    const fenceRegex = /```[A-Za-z0-9_-]*[ \t]*\r?\n?([\s\S]*?)```/g;
-    let masked = input;
-    for (const match of input.matchAll(fenceRegex)) {
-      const at = match.index ?? 0;
-      candidates.push({ at, body: match[1].trim() });
-      masked = masked.slice(0, at) + ' '.repeat(match[0].length) + masked.slice(at + match[0].length);
-    }
-    const bareRegexSource = extractJsonObjects(masked);
-    let cursor = 0;
-    for (const body of bareRegexSource) {
-      const at = masked.indexOf(body, cursor);
-      cursor = at + body.length;
-      candidates.push({ at, body });
-    }
-
-    candidates.sort((a, b) => a.at - b.at);
-    const calls: ToolCall[] = [];
-    for (const candidate of candidates) {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(candidate.body);
-      } catch {
-        // Prose or half-written JSON, not a tool call.
-        continue;
-      }
-      calls.push(...callsFromParsed(parsed));
-      if (calls.length >= maxCalls) {
-        break;
-      }
-    }
-    return calls.slice(0, Math.max(0, maxCalls));
+    return parseToolCallsFromText(text, maxCalls);
   }
+}
+
+/**
+ * Parses tool calls from model text: fenced blocks (```json or bare ```) and bare JSON objects, several per
+ * message, in text order. Malformed JSON and non-call objects are ignored. Capped at `maxCallsPerTurn`.
+ */
+export function parseToolCallsFromText(text: string, maxCalls: number = DEFAULT_MAX_CALLS_PER_TURN): ToolCall[] {
+  const input = text.length > MAX_PARSE_INPUT_CHARS ? text.slice(0, MAX_PARSE_INPUT_CHARS) : text;
+  const candidates: Array<{ at: number; body: string }> = [];
+
+  const fenceRegex = /```[A-Za-z0-9_-]*[ \t]*\r?\n?([\s\S]*?)```/g;
+  let masked = input;
+  for (const match of input.matchAll(fenceRegex)) {
+    const at = match.index ?? 0;
+    candidates.push({ at, body: match[1].trim() });
+    masked = masked.slice(0, at) + ' '.repeat(match[0].length) + masked.slice(at + match[0].length);
+  }
+  const bareRegexSource = extractJsonObjects(masked);
+  let cursor = 0;
+  for (const body of bareRegexSource) {
+    const at = masked.indexOf(body, cursor);
+    cursor = at + body.length;
+    candidates.push({ at, body });
+  }
+
+  candidates.sort((a, b) => a.at - b.at);
+  const calls: ToolCall[] = [];
+  for (const candidate of candidates) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(candidate.body);
+    } catch {
+      // Prose or half-written JSON, not a tool call.
+      continue;
+    }
+    calls.push(...callsFromParsed(parsed));
+    if (calls.length >= maxCalls) {
+      break;
+    }
+  }
+  return calls.slice(0, Math.max(0, maxCalls));
 }
 
 class ToolTimeoutError extends Error {

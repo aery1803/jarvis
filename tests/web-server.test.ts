@@ -214,7 +214,7 @@ describe('JarvisWebServer basics', () => {
     assert.equal(same.status, 201);
     const del = await fetch(`${base}/api/sessions/abc`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' } });
     assert.equal(del.status, 403);
-    for (const target of ['/api/kill', '/api/kill/reset', '/api/approvals/x', '/api/benchmark', '/api/eval', '/api/skills', '/api/skills/x/promote', '/api/agents/research', '/api/email/ingest', '/api/email/x/send', '/api/email/x/draft', '/api/media/describe', '/api/chat/stream']) {
+    for (const target of ['/api/kill', '/api/kill/reset', '/api/approvals/x', '/api/benchmark', '/api/probe/speed', '/api/eval', '/api/skills', '/api/skills/x/promote', '/api/agents/research', '/api/email/ingest', '/api/email/x/send', '/api/email/x/draft', '/api/media/describe', '/api/chat/stream']) {
       const res = await fetch(`${base}${target}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
       assert.equal(res.status, 403, target);
     }
@@ -741,7 +741,7 @@ describe('kill switch over HTTP', () => {
     const refused = await postJson(base, '/api/chat/stream', { sessionId: id, prompt: 'hi', model: 'qwen3:8b' });
     assert.equal(refused.status, 503);
     assert.match(refused.json.error, /owner pressed stop/);
-    for (const [path, body] of [['/api/benchmark', {}], ['/api/eval', {}], ['/api/agents/research', { goal: 'anything at all' }], ['/api/skills', { description: 'a skill that counts words' }]] as const) {
+    for (const [path, body] of [['/api/benchmark', {}], ['/api/probe/speed', {}], ['/api/eval', {}], ['/api/agents/research', { goal: 'anything at all' }], ['/api/skills', { description: 'a skill that counts words' }]] as const) {
       assert.equal((await postJson(base, path, body)).status, 503, path);
     }
 
@@ -999,16 +999,17 @@ describe('POST /api/benchmark and GET /api/benchmark', () => {
 
 describe('evaluation endpoints', () => {
   // One reply per harness case, in case order: reasoning, tool call, retrieval.
-  const CORRECT_EVAL_REPLIES = ['It arrives at 4:00 PM.', '{"tool":"system_stats","parameters":{}}', '31.65 GB'];
+  const CORRECT_EVAL_REPLIES = ['A 2-hour trip.\nANSWER: 4:00 PM', '{"tool":"system_stats","parameters":{}}', 'ANSWER: 31.65 GB'];
   const evalProvider = (replies: string[]): ScriptedProvider => new ScriptedProvider(replies.map((reply) => ({ chunks: [reply] })));
 
   test('a wrong answer to one case fails that case and keeps the run below target', async () => {
-    const { base } = await startServer({ providerFactory: () => evalProvider(['It arrives at 4:00 PM.', 'I would call the stats tool.', '31.65 GB']) });
+    const { base } = await startServer({ providerFactory: () => evalProvider(['ANSWER: 4:00 PM', 'I would call the stats tool.', 'ANSWER: 31.65 GB']) });
     const run = await postJson(base, '/api/eval');
     assert.equal(run.status, 200);
     assert.deepEqual(run.json.report.results.map((r: { passed: boolean }) => r.passed), [true, false, true]);
     assert.equal(run.json.report.accuracyRate, 0.67);
     assert.equal(run.json.report.meetsTarget, false);
+    assert.equal(run.json.report.results[1].notes, 'no parseable tool call in the reply');
   });
 
   test('POST /api/eval runs the harness once, reports accuracy against the 90% target, and GET returns the last run', async () => {
@@ -1020,6 +1021,7 @@ describe('evaluation endpoints', () => {
     assert.equal(run.status, 200);
     assert.equal(run.json.report.accuracyRate, 1);
     assert.equal(run.json.report.meetsTarget, true);
+    assert.ok(run.json.report.results.every((r: { reason: string; latencyMs: number }) => r.reason && r.latencyMs >= 0));
     assert.equal(run.json.model, 'qwen3:8b');
     const last = await getJson(base, '/api/eval');
     assert.equal(last.json.last.report.totalTests, run.json.report.totalTests);

@@ -59,6 +59,41 @@ export interface GenerateStreamOptions extends GenerateOptions {
   signal?: AbortSignal;
 }
 
+/** One non-streaming `/api/generate` call made only to read Ollama's own timing counters. */
+export interface SpeedProbeRequest {
+  prompt: string;
+  numCtx: number;
+  numPredict: number;
+  think: boolean;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}
+
+/** Ollama's final-object counters exactly as reported (durations in nanoseconds); a field the backend left out stays undefined. */
+export interface SpeedProbeCounters {
+  loadDurationNs?: number;
+  promptEvalCount?: number;
+  promptEvalDurationNs?: number;
+  evalCount?: number;
+  evalDurationNs?: number;
+  totalDurationNs?: number;
+  doneReason?: string;
+}
+
+/** What `/api/ps` reports for one resident model. `contextLength` is absent on Ollama builds that do not send it. */
+export interface ResidentModelInfo {
+  name: string;
+  sizeBytes: number;
+  sizeVramBytes: number;
+  contextLength?: number;
+}
+
+export interface SpeedProbeClient {
+  generateOnce(request: SpeedProbeRequest): Promise<SpeedProbeCounters>;
+  /** The model's `/api/ps` entry, or null when it is not resident. */
+  residentModel(options?: { signal?: AbortSignal; timeoutMs?: number }): Promise<ResidentModelInfo | null>;
+}
+
 export interface PullProgress {
   status: string;
   completedBytes?: number;
@@ -256,7 +291,7 @@ export interface OllamaProviderOptions {
   defaultContextTokens?: number;
 }
 
-export class OllamaProvider implements LLMProvider {
+export class OllamaProvider implements LLMProvider, SpeedProbeClient {
   private baseUrl: string;
   private model: string;
   private defaultContextTokens: number;
@@ -392,6 +427,63 @@ export class OllamaProvider implements LLMProvider {
       logger.error(`[OllamaProvider] Chat failed: ${err instanceof Error ? err.message : String(err)}`);
       throw err;
     }
+  }
+
+  /**
+   * One non-streaming `/api/generate` call at temperature 0 with `keep_alive` left at Ollama's default. `think` is always
+   * sent (the retry in `post` drops it for models that have no thinking mode), so a thinking model does not spend the
+   * token budget on a hidden reasoning block when the caller asked for none.
+   */
+  public async generateOnce(request: SpeedProbeRequest): Promise<SpeedProbeCounters> {
+    const response = await this.post(
+      '/api/generate',
+      {
+        model: this.model,
+        prompt: request.prompt,
+        stream: false,
+        options: { num_ctx: request.numCtx, num_predict: request.numPredict, temperature: 0 },
+      },
+      request.think,
+      combineSignals(request.signal, request.timeoutMs ?? DEFAULT_CHAT_TIMEOUT_MS)
+    );
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      throw new Error(`Ollama error ${response.status}: ${detail.slice(0, 200) || response.statusText}`);
+    }
+    const body: unknown = await response.json();
+    if (typeof body !== 'object' || body === null) throw new Error('Ollama returned an unexpected response shape');
+    const record = body as Record<string, unknown>;
+    if (typeof record.error === 'string') throw new Error(`Ollama error: ${record.error}`);
+    const count = (key: string): number | undefined => (typeof record[key] === 'number' && Number.isFinite(record[key]) ? (record[key] as number) : undefined);
+    return {
+      loadDurationNs: count('load_duration'),
+      promptEvalCount: count('prompt_eval_count'),
+      promptEvalDurationNs: count('prompt_eval_duration'),
+      evalCount: count('eval_count'),
+      evalDurationNs: count('eval_duration'),
+      totalDurationNs: count('total_duration'),
+      ...(typeof record.done_reason === 'string' ? { doneReason: record.done_reason } : {}),
+    };
+  }
+
+  public async residentModel(options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<ResidentModelInfo | null> {
+    const res = await fetch(`${this.baseUrl}/api/ps`, { signal: combineSignals(options.signal, options.timeoutMs ?? DEFAULT_LIST_TIMEOUT_MS) });
+    if (!res.ok) throw new Error(`Ollama /api/ps returned HTTP ${res.status}: ${res.statusText}`);
+    const body: unknown = await res.json();
+    const models = typeof body === 'object' && body !== null && Array.isArray((body as { models?: unknown }).models) ? ((body as { models: unknown[] }).models) : [];
+    for (const entry of models) {
+      if (typeof entry !== 'object' || entry === null) continue;
+      const record = entry as Record<string, unknown>;
+      if (record.name !== this.model && record.model !== this.model) continue;
+      const num = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) ? value : 0);
+      return {
+        name: typeof record.name === 'string' ? record.name : this.model,
+        sizeBytes: num(record.size),
+        sizeVramBytes: num(record.size_vram),
+        ...(typeof record.context_length === 'number' ? { contextLength: record.context_length } : {}),
+      };
+    }
+    return null;
   }
 
   public setModel(model: string): void {

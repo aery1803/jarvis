@@ -98,3 +98,45 @@ export function isDrawerHidden(isNarrow, isOpen) {
 export function modelRetryDelayMs(attempt) {
   return Math.min(30_000, 3_000 * 2 ** Math.max(0, attempt));
 }
+
+/** Context windows the Speed test offers (tokens). Larger windows allocate more memory and can lower decode speed. */
+export const SPEED_CONTEXT_OPTIONS = [2048, 4096, 8192, 16384, 32768];
+
+const speedRate = (value) => (typeof value === 'number' && Number.isFinite(value) ? value.toFixed(1) : 'n/a');
+const speedCount = (value) => (typeof value === 'number' && Number.isFinite(value) ? String(value) : 'n/a');
+
+/** Table rows for a `/api/probe/speed` response; a counter Ollama did not report reads 'n/a', never 0. */
+export function speedRunRows(response) {
+  const runs = Array.isArray(response?.runs) ? response.runs : [];
+  return runs.map((run) => [
+    run.run === 1 && runs.length > 1 ? '1 (first, may include load)' : String(run.run),
+    typeof run.loadMs === 'number' ? `${run.loadMs.toFixed(0)} ms` : 'n/a',
+    speedCount(run.promptEvalTokens),
+    speedRate(run.promptEvalTokensPerSec),
+    speedCount(run.decodeTokens),
+    speedRate(run.decodeTokensPerSec),
+    typeof run.doneReason === 'string' ? run.doneReason : 'n/a',
+  ]);
+}
+
+/** One sentence under the speed table: the headline decode speed and where the model sits in memory. */
+export function speedSummaryText(response) {
+  const summary = response?.summary;
+  if (!summary || summary.medianDecodeTokensPerSec === null || summary.medianDecodeTokensPerSec === undefined) {
+    return 'Ollama reported no decode timing for this run, so no speed is shown.';
+  }
+  const basis = summary.basedOn === 'warm runs' ? `${summary.runsCounted} warm run${summary.runsCounted === 1 ? '' : 's'} (the first is excluded)` : 'the only run';
+  const parts = [`Decode speed: median ${speedRate(summary.medianDecodeTokensPerSec)} t/s, best ${speedRate(summary.bestDecodeTokensPerSec)} t/s over ${basis}, at ${response.numCtx} tokens of context.`];
+  const resident = response.resident;
+  if (resident) {
+    const gb = (bytes) => (bytes / 2 ** 30).toFixed(1);
+    const share = typeof resident.vramShare === 'number' ? `${Math.round(resident.vramShare * 100)}% in GPU memory` : 'GPU share unknown';
+    const context = typeof resident.contextLength === 'number' ? `, loaded context ${resident.contextLength}` : '';
+    parts.push(`Ollama has it resident: ${gb(resident.sizeBytes)} GB, ${share}${context}.`);
+  } else if (response.residentError) {
+    parts.push(`Memory placement unavailable: ${response.residentError}`);
+  } else {
+    parts.push('Ollama no longer lists the model as resident.');
+  }
+  return parts.join(' ');
+}

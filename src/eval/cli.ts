@@ -10,6 +10,8 @@ import { ModelBenchmarkSuite, benchmarkGuard } from './benchmark.js';
 import type { ModelBenchmarkScorecard } from './benchmark.js';
 import { OllamaProvider } from '../services/provider.js';
 import { config } from '../config.js';
+import { ToolRegistry } from '../tools/registry.js';
+import { parseToolCallsFromText } from '../tools/executor.js';
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
@@ -35,7 +37,10 @@ async function main(): Promise<void> {
     throw new Error('Ollama is reachable but has no installed models.');
   }
 
-  const suite = new ModelBenchmarkSuite({ thinkingMode: config.thinkingMode });
+  // Parsing and schema validation need no gateway; the registry only supplies the tool schemas the cases offer.
+  const registry = new ToolRegistry();
+  registry.registerBuiltinTools();
+  const suite = new ModelBenchmarkSuite({ thinkingMode: config.thinkingMode, toolbox: { registry, parseCalls: (text) => parseToolCallsFromText(text) } });
   const abort = new AbortController();
   process.once('SIGINT', () => abort.abort());
 

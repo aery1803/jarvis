@@ -1200,6 +1200,11 @@ a:focus-visible {
   color: var(--accent-cyan);
 }
 
+.card-subheading {
+  margin: 16px 0 4px;
+  font-size: 0.95rem;
+}
+
 .card-description {
   color: var(--text-muted);
   font-size: 0.8rem;

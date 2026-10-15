@@ -5,7 +5,7 @@
  */
 
 import { formatFinalMarkdown } from './markdown.js';
-import { deviceStatusCells } from './ui-logic.js';
+import { deviceStatusCells, SPEED_CONTEXT_OPTIONS, speedRunRows, speedSummaryText } from './ui-logic.js';
 import {
   requestJson,
   jsonRequest,
@@ -163,13 +163,31 @@ function buildLedger() {
 // ---- Benchmark ---------------------------------------------------------------------------------------------------
 
 function buildBenchmark(getModels) {
-  const card = createCard('benchmark', 'Benchmark', 'Runs a fixed set of reasoning, coding, tool-calling and retrieval cases on one model at a time.');
+  const card = createCard('benchmark', 'Benchmark', 'Runs reasoning, coding, tool-calling and retrieval cases on one model at a time. Only correctness is scored; latency and speed are reported.');
   const select = h('select', { id: 'benchmarkModel', 'aria-label': 'Model to benchmark', dataset: { testid: 'benchmark-model' } });
   const runButton = h('button', { type: 'button', class: 'btn btn-primary', id: 'benchmarkRun', dataset: { testid: 'benchmark-run' } }, 'Run benchmark');
   const progressEl = h('div', { class: 'progress-line', dataset: { testid: 'benchmark-progress' }, hidden: true });
   const messageEl = h('div', { class: 'card-message', dataset: { testid: 'benchmark-message' } });
   const results = h('div', { class: 'benchmark-results', dataset: { testid: 'benchmark-results' } });
   card.body.append(h('div', { class: 'control-row' }, h('label', { for: 'benchmarkModel' }, 'Model'), select, runButton), progressEl, messageEl, results);
+
+  const speedSelect = h('select', { id: 'speedModel', 'aria-label': 'Model for the speed test', dataset: { testid: 'speed-model' } });
+  const speedContext = h(
+    'select',
+    { id: 'speedContext', 'aria-label': 'Context window for the speed test', dataset: { testid: 'speed-context' } },
+    SPEED_CONTEXT_OPTIONS.map((tokens) => h('option', { value: String(tokens) }, `${tokens} tokens`))
+  );
+  speedContext.value = '4096';
+  const speedButton = h('button', { type: 'button', class: 'btn btn-primary', id: 'speedRun', dataset: { testid: 'speed-run' } }, 'Run speed test');
+  const speedMessage = h('div', { class: 'card-message', role: 'status', dataset: { testid: 'speed-message' } });
+  const speedResults = h('div', { class: 'benchmark-results', dataset: { testid: 'speed-results' } });
+  card.body.append(
+    h('h4', { class: 'card-subheading' }, 'Speed test'),
+    h('p', { class: 'card-description' }, 'Times a fixed prompt three times and reports decode speed from Ollama\'s own counters. It shares the one-at-a-time slot with benchmarks.'),
+    h('div', { class: 'control-row' }, h('label', { for: 'speedModel' }, 'Model'), speedSelect, h('label', { for: 'speedContext' }, 'Context'), speedContext, speedButton),
+    speedMessage,
+    speedResults
+  );
   let pollTimer = null;
   let localRun = false;
 
@@ -227,14 +245,25 @@ function buildBenchmark(getModels) {
   const fillModels = () => {
     const data = getModels();
     const previous = select.value;
+    const previousSpeed = speedSelect.value;
     clear(select);
+    clear(speedSelect);
     if (!data || !Array.isArray(data.modelDetails) || data.modelDetails.length === 0) {
       select.append(h('option', { value: '' }, 'No models available'));
+      speedSelect.append(h('option', { value: '' }, 'No models available'));
       runButton.disabled = true;
+      speedButton.disabled = true;
       return;
     }
-    data.modelDetails.forEach((m) => select.append(h('option', { value: m.name }, `${m.name}${m.fits === false ? ' (does not fit now)' : ''}`)));
-    select.value = data.modelDetails.some((m) => m.name === previous) ? previous : data.models.includes(data.active) ? data.active : data.models[0];
+    speedButton.disabled = false;
+    data.modelDetails.forEach((m) => {
+      const label = `${m.name}${m.fits === false ? ' (does not fit now)' : ''}`;
+      select.append(h('option', { value: m.name }, label));
+      speedSelect.append(h('option', { value: m.name }, label));
+    });
+    const pick = (previousValue) => (data.modelDetails.some((m) => m.name === previousValue) ? previousValue : data.models.includes(data.active) ? data.active : data.models[0]);
+    select.value = pick(previous);
+    speedSelect.value = pick(previousSpeed);
   };
   card.fillModels = fillModels;
 
@@ -492,7 +521,19 @@ function buildEval() {
     resultEl.append(
       bar,
       h('p', { class: 'card-summary' }, meets ? badge('meets the 90% target', 'ok') : badge('below the 90% target', 'error'), ` ${report.passedTests} of ${report.totalTests} passed on ${snapshot.model}; ${report.erroredTests} could not be answered; average latency ${formatDuration(report.avgLatencyMs)}.${report.aborted ? ' The run was stopped early.' : ''}`),
-      table(['Case', 'Category', 'Result', 'Latency', 'Note'], report.results.map((r) => [r.testId, r.category, r.passed ? badge('pass', 'ok') : r.errored ? badge('error', 'error') : badge('fail', 'warn'), formatDuration(r.latencyMs), r.notes ?? '']), 'eval-table')
+      table(
+        ['Case', 'Category', 'Result', 'Latency (not graded)', 'Tokens', 'Decode t/s', 'Reason'],
+        report.results.map((r) => [
+          r.testId,
+          r.category,
+          r.passed ? badge('pass', 'ok') : r.errored ? badge('error', 'error') : badge('fail', 'warn'),
+          formatDuration(r.latencyMs),
+          typeof r.completionTokens === 'number' ? String(r.completionTokens) : 'n/a',
+          typeof r.decodeTokensPerSec === 'number' ? r.decodeTokensPerSec.toFixed(1) : 'n/a',
+          r.reason ?? r.notes ?? '',
+        ]),
+        'eval-table'
+      )
     );
   };
 
